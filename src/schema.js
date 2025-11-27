@@ -51,10 +51,10 @@ export const UpdateUser = updateUserSchema;
 
 // ------------------------------------------
 
-// Business schema (unchanged)
+// Business schema with auto-increment businessId
 export const businessSchema = z.object({
   id: z.string().optional(),
-  businessId: z.string().optional(),
+  businessId: z.number().int().positive("Business ID must be a positive number"),
   businessName: z.string().min(1, "Business name is required"),
   registrationNumber: z.string().min(1, "Registration number is required"), 
   businessType: z.enum(["Hotel", "Kiosk", "Hospital", "Retail", "Other"], {
@@ -70,14 +70,14 @@ export const businessSchema = z.object({
     .regex(/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, "Invalid hex color code")
     .default("#000000"),
   owner: z.string().min(1, "Owner is required"),
-  status: z.enum(["active", "inactive"]).default("active"),
+  status: z.enum(["active", "inactive", "new"]).default("new"),
   createdAt: z.date().default(() => new Date()),
   updatedAt: z.date().default(() => new Date()),
 });
 
 export const insertBusinessSchema = businessSchema.omit({
   id: true,
-  businessId: true,
+  businessId: true, // Remove businessId from insert - it will be auto-generated
   createdAt: true,
   updatedAt: true,
 }).extend({
@@ -86,7 +86,7 @@ export const insertBusinessSchema = businessSchema.omit({
 
 export const updateBusinessSchema = businessSchema.omit({
   id: true,
-  businessId: true, 
+  businessId: true, // businessId cannot be updated
   registrationNumber: true,
   owner: true,
   createdAt: true,

@@ -4,6 +4,7 @@ import { Router } from 'express';
 import { insertBusinessSchema, updateBusinessSchema } from '../schema.js'; 
 import { z } from 'zod';
 import multer from 'multer';
+import { authenticateToken, authorize } from '../middleware/authMiddleware.js';
 
 // Initialize storage and router
 export default function BusinessRoutes(storage) {
@@ -25,32 +26,44 @@ export default function BusinessRoutes(storage) {
         }
     }); 
 
-    // --- Mock Middleware for Demonstration ---
-
-    // 1. Auth Middleware (Placeholder)
+    // --- JWT Authentication Middleware ---
     const protect = (req, res, next) => {
-        // Mock user attached to request for authorization checks
-        req.user = { 
-            email: 'test.admin@example.com', 
-            id: 'user-123', 
-            role: 'Biztrack_ADMIN',
-            associatedBusinessId: 'BIZ-TRACK-DEFAULT'
-        };
-        next();
+        try {
+            const token = req.header('Authorization')?.replace('Bearer ', '');
+            
+            if (!token) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Access denied. No token provided.'
+                });
+            }
+
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            req.user = decoded;
+            next();
+        } catch (error) {
+            console.error('JWT verification failed:', error.message);
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid or expired token'
+            });
+        }
     };
 
-    // 2. Admin/Super Admin Authorization Middleware (Placeholder)
+    // --- Admin Authorization Middleware ---
     const restrictToAdmin = (req, res, next) => {
-        if (req.user.role === 'Biztrack_ADMIN') {
+        if (req.user.role === 'Biztrack_ADMIN' || req.user.role === 'Super_Admin') {
             next();
         } else {
-            res.status(403).json({ message: 'Forbidden: Insufficient privileges.' });
+            res.status(403).json({ 
+                success: false,
+                message: 'Forbidden: Insufficient privileges.' 
+            });
         }
     };
 
     // --- Helper Function to Process FormData ---
     const processBusinessData = (body) => {
-        // FormData sends all fields as strings, so we need to process them
         const processedData = { ...body };
         
         // Convert empty strings to null/undefined for optional fields
@@ -69,10 +82,33 @@ export default function BusinessRoutes(storage) {
         return processedData;
     };
 
+    // --- Helper Function to Generate Auto-Increment Business ID ---
+    const generateNextBusinessId = async () => {
+        try {
+            const businesses = await storage.getBusinesses();
+            
+            if (!businesses || businesses.length === 0) {
+                return 1; // Start from 1 if no businesses exist
+            }
+            
+            // Find the highest businessId
+            const maxBusinessId = businesses.reduce((max, business) => {
+                const businessId = business.businessId || 0;
+                return businessId > max ? businessId : max;
+            }, 0);
+            
+            return maxBusinessId + 1;
+        } catch (error) {
+            console.error('Error generating business ID:', error);
+            // Fallback: use timestamp if there's an error
+            return Date.now();
+        }
+    };
+
     // --- Route Definitions ---
 
     /**
-     * @route POST /api/businesses
+     * @route POST /api/business
      * @desc Create a new business (Requires Admin). Handles logo upload.
      */
     businessRouter.post('/', 
@@ -91,7 +127,11 @@ export default function BusinessRoutes(storage) {
                 size: logoFile.size
             } : 'No file');
 
-            // 1. Zod Validation - Process the form data
+            // 1. Generate auto-increment business ID
+            const nextBusinessId = await generateNextBusinessId();
+            console.log("🔢 Generated Business ID:", nextBusinessId);
+
+            // 2. Zod Validation
             const parsedData = insertBusinessSchema.parse({
                 businessName: body.businessName,
                 registrationNumber: body.registrationNumber,
@@ -102,50 +142,50 @@ export default function BusinessRoutes(storage) {
                 website: body.website,
                 description: body.description,
                 primaryColor: body.primaryColor,
-                status: body.status || 'new', // Default to 'new'
+                status: body.status || 'new',
                 logoUrl: body.logoUrl,
                 owner: body.owner
             });
 
             console.log("✅ Validated Data:", parsedData);
 
-            // 2. Check for uniqueness
+            // 3. Check for uniqueness
             const existingBusinessByReg = await storage.getBusinessByRegistrationNumber(parsedData.registrationNumber);
             if (existingBusinessByReg) {
-                return res.status(400).json({ message: 'A business with this registration number already exists.' });
+                return res.status(400).json({ 
+                    success: false,
+                    message: 'A business with this registration number already exists.' 
+                });
             }
             
-            // 3. Handle Logo Upload Logic
+            // 4. Handle Logo Upload Logic
             let logoUrl = parsedData.logoUrl || '';
 
             if (logoFile) {
-                // In a real implementation, you would upload to cloud storage (AWS S3, Google Cloud Storage, etc.)
-                // For now, we'll create a mock URL and store the file buffer in the database
+                // In a real application, you would upload logoFile.buffer to S3/Cloud Storage here.
+                // For demonstration, we construct a placeholder URL.
                 logoUrl = `https://biztrack.com/logos/${parsedData.registrationNumber}-${Date.now()}.${logoFile.mimetype.split('/')[1]}`;
                 console.log(`🖼️ Logo Upload: ${logoFile.originalname} -> ${logoUrl}`);
-                
-                // Store file buffer in database (you might want to store in separate file storage)
-                // For demo, we'll just store the URL
             } else if (!logoUrl) {
-                // Use default logo if none is uploaded or provided
                 logoUrl = 'https://biztrack.com/default_logo.svg'; 
             }
             
-            // Prepare data for storage
+            // Prepare data for storage with auto-generated businessId
             const businessData = { 
                 ...parsedData, 
+                businessId: nextBusinessId, // Add the auto-generated ID
                 logoUrl,
-                // Add any additional fields your storage expects
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
             };
 
-            console.log("💾 Saving Business Data:", businessData);
+            console.log("💾 Saving Business Data with ID:", businessData.businessId);
 
-            // 4. Create Business in DB
+            // 5. Create Business in DB
             const newBusiness = await storage.createBusiness(businessData);
 
             res.status(201).json({ 
+                success: true,
                 message: 'Business created successfully.', 
                 business: newBusiness 
             });
@@ -154,13 +194,21 @@ export default function BusinessRoutes(storage) {
             if (error instanceof z.ZodError) {
                 console.error("❌ Validation Error:", error.errors);
                 return res.status(400).json({ 
+                    success: false,
                     message: 'Validation failed', 
-                    errors: error.errors,
-                    error: error.message 
+                    errors: error.errors
+                });
+            }
+            // Add check for Multer file filter error
+            if (error.message === 'Only image files are allowed!') {
+                return res.status(400).json({
+                    success: false,
+                    message: error.message
                 });
             }
             console.error('🚨 Business creation error:', error);
             res.status(500).json({ 
+                success: false,
                 message: 'Internal server error during business creation.', 
                 error: error.message 
             });
@@ -168,7 +216,7 @@ export default function BusinessRoutes(storage) {
     });
 
     /**
-     * @route GET /api/businesses
+     * @route GET /api/business
      * @desc Get all businesses (Requires Admin)
      */
     businessRouter.get('/', protect, restrictToAdmin, async (req, res) => {
@@ -179,15 +227,22 @@ export default function BusinessRoutes(storage) {
                 ...business,
                 status: business.status?.toUpperCase() || 'NEW'
             }));
-            res.status(200).json(transformedBusinesses);
+            
+            res.status(200).json({
+                success: true,
+                data: transformedBusinesses
+            });
         } catch (error) {
             console.error('Get businesses error:', error);
-            res.status(500).json({ message: 'Internal server error.' });
+            res.status(500).json({ 
+                success: false,
+                message: 'Internal server error.' 
+            });
         }
     });
 
     /**
-     * @route GET /api/businesses/:id
+     * @route GET /api/business/:id
      * @desc Get business by ID (Requires Admin or business owner/associate)
      */
     businessRouter.get('/:id', protect, async (req, res) => {
@@ -196,12 +251,18 @@ export default function BusinessRoutes(storage) {
             const business = await storage.getBusiness(id);
 
             if (!business) {
-                return res.status(404).json({ message: 'Business not found.' });
+                return res.status(404).json({ 
+                    success: false,
+                    message: 'Business not found.' 
+                });
             }
 
-            // Basic Authorization Check
-            if (req.user.role !== 'Biztrack_ADMIN' && req.user.associatedBusinessId !== business.businessId) {
-                return res.status(403).json({ message: 'Forbidden: Not authorized to view this business.' });
+            // Authorization Check
+            if (req.user.role !== 'Biztrack_ADMIN' && req.user.role !== 'Super_Admin' && req.user.associatedBusinessId !== business.businessId) {
+                return res.status(403).json({ 
+                    success: false,
+                    message: 'Forbidden: Not authorized to view this business.' 
+                });
             }
 
             // Transform status to uppercase for frontend
@@ -210,15 +271,21 @@ export default function BusinessRoutes(storage) {
                 status: business.status?.toUpperCase() || 'NEW'
             };
 
-            res.status(200).json(transformedBusiness);
+            res.status(200).json({
+                success: true,
+                data: transformedBusiness
+            });
         } catch (error) {
             console.error('Get business error:', error);
-            res.status(500).json({ message: 'Internal server error.' });
+            res.status(500).json({ 
+                success: false,
+                message: 'Internal server error.' 
+            });
         }
     });
 
     /**
-     * @route PATCH /api/businesses/:id
+     * @route PATCH /api/business/:id
      * @desc Update business details (Requires Admin or business owner/associate). Handles logo update.
      */
     businessRouter.patch('/:id', protect, upload.single('logo'), async (req, res) => {
@@ -237,12 +304,18 @@ export default function BusinessRoutes(storage) {
             // 1. Fetch existing business
             const existingBusiness = await storage.getBusiness(id);
             if (!existingBusiness) {
-                return res.status(404).json({ message: 'Business not found.' });
+                return res.status(404).json({ 
+                    success: false,
+                    message: 'Business not found.' 
+                });
             }
             
             // 2. Authorization Check
-            if (req.user.role !== 'Biztrack_ADMIN' && req.user.associatedBusinessId !== existingBusiness.businessId) {
-                return res.status(403).json({ message: 'Forbidden: Not authorized to edit this business.' });
+            if (req.user.role !== 'Biztrack_ADMIN' && req.user.role !== 'Super_Admin' && req.user.associatedBusinessId !== existingBusiness.businessId) {
+                return res.status(403).json({ 
+                    success: false,
+                    message: 'Forbidden: Not authorized to edit this business.' 
+                });
             }
             
             // 3. Zod Validation (partial update)
@@ -267,16 +340,15 @@ export default function BusinessRoutes(storage) {
             let logoUrl = existingBusiness.logoUrl; 
 
             if (logoFile) {
-                // Upload new logo
+                // In a real application, you would upload logoFile.buffer to S3/Cloud Storage here.
                 logoUrl = `https://biztrack.com/logos/${existingBusiness.registrationNumber}-${Date.now()}-updated.${logoFile.mimetype.split('/')[1]}`;
                 console.log(`🖼️ Logo Update: ${logoFile.originalname} -> ${logoUrl}`);
             } else if (body.logoUrl === '' || body.logoUrl === null) {
-                // Allow client to explicitly clear the logo
+                // If the frontend explicitly sends logoUrl as empty string (e.g., user cleared it)
                 logoUrl = '';
             }
-            // If no logo file and no explicit clear, keep existing logoUrl
             
-            // Prepare final update payload
+            // Prepare final update payload (preserve existing businessId)
             const finalUpdatePayload = { 
                 ...updateData, 
                 logoUrl,
@@ -288,6 +360,13 @@ export default function BusinessRoutes(storage) {
             // 5. Update Business in DB
             const updatedBusiness = await storage.updateBusiness(id, finalUpdatePayload);
 
+            if (!updatedBusiness) {
+                 return res.status(404).json({ 
+                    success: false,
+                    message: 'Business not found after update attempt.' 
+                });
+            }
+            
             // Transform status for response
             const transformedBusiness = {
                 ...updatedBusiness,
@@ -295,20 +374,30 @@ export default function BusinessRoutes(storage) {
             };
 
             res.status(200).json({ 
+                success: true,
                 message: 'Business updated successfully.', 
-                business: transformedBusiness 
+                data: transformedBusiness 
             });
 
         } catch (error) {
             if (error instanceof z.ZodError) {
                 console.error("❌ Validation Error:", error.errors);
                 return res.status(400).json({ 
+                    success: false,
                     message: 'Validation failed', 
                     errors: error.errors 
                 });
             }
+            // Add check for Multer file filter error
+            if (error.message === 'Only image files are allowed!') {
+                return res.status(400).json({
+                    success: false,
+                    message: error.message
+                });
+            }
             console.error('🚨 Business update error:', error);
             res.status(500).json({ 
+                success: false,
                 message: 'Internal server error during business update.',
                 error: error.message 
             });
@@ -316,7 +405,7 @@ export default function BusinessRoutes(storage) {
     });
 
     /**
-     * @route PUT /api/businesses/:id/status
+     * @route PUT /api/business/:id/status
      * @desc Toggle business status (Requires Admin)
      */
     businessRouter.put('/:id/status', protect, restrictToAdmin, async (req, res) => {
@@ -325,18 +414,31 @@ export default function BusinessRoutes(storage) {
             const { status } = req.body;
 
             if (!status || !['active', 'inactive', 'new'].includes(status.toLowerCase())) {
-                return res.status(400).json({ message: 'Invalid status provided.' });
+                return res.status(400).json({ 
+                    success: false,
+                    message: 'Invalid status provided. Must be active, inactive, or new.' 
+                });
             }
 
             const existingBusiness = await storage.getBusiness(id);
             if (!existingBusiness) {
-                return res.status(404).json({ message: 'Business not found.' });
+                return res.status(404).json({ 
+                    success: false,
+                    message: 'Business not found.' 
+                });
             }
 
             const updatedBusiness = await storage.updateBusiness(id, { 
                 status: status.toLowerCase(),
                 updatedAt: new Date().toISOString()
             });
+            
+            if (!updatedBusiness) {
+                 return res.status(404).json({ 
+                    success: false,
+                    message: 'Business not found after status update attempt.' 
+                });
+            }
 
             const transformedBusiness = {
                 ...updatedBusiness,
@@ -344,24 +446,36 @@ export default function BusinessRoutes(storage) {
             };
 
             res.status(200).json({ 
-                message: `Business status updated to ${status}.`,
-                business: transformedBusiness
+                success: true,
+                message: `Business status updated to ${status.toUpperCase()}.`,
+                data: transformedBusiness
             });
 
         } catch (error) {
             console.error('Status update error:', error);
-            res.status(500).json({ message: 'Internal server error during status update.' });
+            res.status(500).json({ 
+                success: false,
+                message: 'Internal server error during status update.' 
+            });
         }
     });
 
     /**
-     * @route DELETE /api/businesses/:id
+     * @route DELETE /api/business/:id
      * @desc Delete business (Archives by setting status to 'inactive') (Requires Admin)
      */
     businessRouter.delete('/:id', protect, restrictToAdmin, async (req, res) => {
         try {
             const { id } = req.params;
             
+            const existingBusiness = await storage.getBusiness(id);
+            if (!existingBusiness) {
+                return res.status(404).json({ 
+                    success: false,
+                    message: 'Business not found.' 
+                });
+            }
+
             // Set business status to 'inactive' (archive)
             const archivedBusiness = await storage.updateBusiness(id, { 
                 status: 'inactive',
@@ -369,19 +483,24 @@ export default function BusinessRoutes(storage) {
             });
             
             if (!archivedBusiness) {
-                return res.status(404).json({ message: 'Business not found.' });
+                return res.status(404).json({ 
+                    success: false,
+                    message: 'Business not found after archive attempt.' 
+                });
             }
-            
-            // NOTE: In a complete system, you would also deactivate all associated users here.
 
             res.status(200).json({ 
-                message: `Business "${archivedBusiness.businessName}" successfully archived.`,
-                business: archivedBusiness
+                success: true,
+                message: `Business "${archivedBusiness.businessName}" (ID: ${archivedBusiness.businessId}) successfully archived.`,
+                data: archivedBusiness
             });
             
         } catch (error) {
             console.error('Business delete/archive error:', error);
-            res.status(500).json({ message: 'Internal server error during business deletion.' });
+            res.status(500).json({ 
+                success: false,
+                message: 'Internal server error during business deletion.' 
+            });
         }
     });
 

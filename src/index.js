@@ -48,9 +48,9 @@ async function startServer() {
         });
 
         // Pass storage to all routes
-        app.use("/api", UserManagementRoutes(storage));
+        app.use("/api/users", UserManagementRoutes(storage));
         app.use("/api/auth", AuthRoutes(storage)); 
-        app.use("/api/businesses", BusinessRoutes(storage));
+        app.use("/api/business", BusinessRoutes(storage));
 
         app.get("/", (req, res) => {
             res.send("WELCOME TO ALVIN API");

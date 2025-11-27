@@ -1,16 +1,25 @@
 import { createServer } from "http";
-import { storage } from "./storage.js";
+// import { storage } from "./storage.js"; // Remove this import
 import { insertContactMessageSchema, insertGivingRecordSchema } from "./schema.js";
 import { z } from "zod";
 import { mpesaService } from './mpesaService.js';
 import { formatPhoneNumber, generateMpesaPassword, getTimestamp, isValidPhoneNumber, displayPhoneNumber } from "./utils.js";
+import BusinessRoutes from "./routes/BusinessRoutes.js";
+import UserManagementRoutes from "./routes/UsermanagementRoutes.js";
+import AuthRoutes from "./routes/AuthRoutes.js";
 
 /**
  * Registers all API routes for the application.
  * @param {import("express").Express} app The Express app instance.
+ * @param {import("./storage.js").IStorage} storage The storage instance.
  * @returns {Promise<import("http").Server>} The HTTP server instance.
  */
-export async function registerRoutes(app) {
+export async function registerRoutes(app, storage) { // Accept storage as an argument
+  // Mount the modular routers
+  app.use("/api/businesses", BusinessRoutes(storage));
+  app.use("/api/users", UserManagementRoutes(storage));
+  app.use("/api/auth", AuthRoutes(storage));
+
   // Blog routes (unchanged)
   app.get("/api/blog/posts", async (req, res) => {
     try {
