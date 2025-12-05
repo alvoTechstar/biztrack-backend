@@ -154,6 +154,7 @@ export default function AuthRoutes(storage) {
             });
         }
     });
+
     // POST /api/auth/resend-otp - Resend OTP for login
     router.post("/resend-otp", async (req, res) => {
         try {
@@ -210,7 +211,6 @@ export default function AuthRoutes(storage) {
     });
 
     // POST /api/auth/verify-otp - Verify OTP for login
-    // POST /api/auth/verify-otp - Verify OTP for login
     router.post("/verify-otp", async (req, res) => {
         try {
             const { email, otp } = req.body;
@@ -253,15 +253,18 @@ export default function AuthRoutes(storage) {
             }
 
             // Get fresh user data
-            const userWithBusiness = await storage.getUserByEmail(email);
-            console.log("🔍 Raw user data from database:", {
-                id: userWithBusiness?.id,
-                email: userWithBusiness?.email,
-                businessId: userWithBusiness?.businessId,
-                role: userWithBusiness?.role
+            const user = await storage.getUserByEmail(email);
+            console.log("🔍 User data from database:", {
+                id: user?.id,
+                email: user?.email,
+                associatedBusinessId: user?.associatedBusinessId,
+                institutionId: user?.institutionId,
+                role: user?.role,
+                firstName: user?.firstName,
+                lastName: user?.lastName
             });
 
-            if (!userWithBusiness) {
+            if (!user) {
                 console.log(`User not found after OTP verification: ${email}`);
                 return res.status(404).json({
                     success: false,
@@ -269,102 +272,82 @@ export default function AuthRoutes(storage) {
                 });
             }
 
-            // Get business data to fetch primaryColor and businessType
+            // Get business data using associatedBusinessId (UUID)
             let business = null;
+            let businessUUID = user.associatedBusinessId;
 
-            // Try to find business by different methods
-            if (userWithBusiness.businessId) {
-                console.log(`🔍 User has businessId: ${userWithBusiness.businessId}`);
-                business = await storage.getBusinessById(userWithBusiness.businessId);
-                console.log("🔍 Business data from businessId:", business);
+            console.log(`🔍 Looking up business for user with UUID:`, businessUUID);
+
+            if (businessUUID) {
+                // ✅ FIX: Use storage.getBusiness() NOT storage.getBusinessById()
+                business = await storage.getBusiness(businessUUID);
             }
 
-            // If no business found by businessId, try other methods
+            // If no business found, try institutionId as fallback
+            if (!business && user.institutionId) {
+                console.log(`🔄 Trying institutionId as fallback: ${user.institutionId}`);
+                business = await storage.getBusiness(user.institutionId);
+                if (business) {
+                    businessUUID = business.id;
+                }
+            }
+
             if (!business) {
-                console.log("🔄 No business linked to user, trying alternative methods...");
-
-                // Method 1: Try to find business by user email
-                try {
-                    business = await storage.getBusinessByEmail(userWithBusiness.email);
-                    console.log("🔍 Business found by user email:", business);
-                } catch (error) {
-                    console.log("❌ No business found by user email");
-                }
-
-                // Method 2: For Hospital_Admin, try to find any hospital business
-                if (!business && userWithBusiness.role === "Hospital_Admin") {
-                    console.log("🔄 User is Hospital_Admin, searching for hospital business...");
-                    try {
-                        // Try common hospital business IDs or names
-                        const hospitalBusiness = await storage.getBusinessById("7b661bc2-c2f2-43d3-8c2d-282b6a67f702");
-                        if (hospitalBusiness) {
-                            console.log("✅ Found hospital business by ID:", hospitalBusiness.businessName);
-                            business = hospitalBusiness;
-                        }
-                    } catch (error) {
-                        console.log("❌ Could not find hospital business by ID");
-                    }
-                }
+                console.log(`❌ No business found for user ${email}`);
+                return res.status(404).json({
+                    success: false,
+                    message: "Business not found for user"
+                });
             }
 
-            // Map role to business type and set default themes
-            const roleToBusinessType = {
-                "Hospital_Admin": "hospital",
-                "Kiosk_Admin": "kiosk",
-                "Hotel_Admin": "hotel",
-                "Super_Admin": "general",
-                "HOSPITAL_ADMIN": "hospital",
-                "KIOSK_ADMIN": "kiosk",
-                "HOTEL_ADMIN": "hotel",
-                "SUPER_ADMIN": "general"
-            };
+            console.log("✅ Business found:", {
+                businessUUID: business.id,
+                businessId: business.businessId, // This is the NUMBER (e.g., 2)
+                businessName: business.businessName,
+                businessType: business.businessType,
+                primaryColor: business.primaryColor
+            });
 
-            // Default business themes
-            const defaultBusinessThemes = {
-                "hospital": { name: "Hospital", primaryColor: "#09243e", type: "hospital" }, // Using the actual hospital color
-                "kiosk": { name: "Kiosk", primaryColor: "#118eed", type: "kiosk" },
-                "hotel": { name: "Hotel", primaryColor: "#dc2626", type: "hotel" },
-                "general": { name: "Business", primaryColor: "#118eed", type: "general" }
-            };
-
-            const determinedBusinessType = roleToBusinessType[userWithBusiness.role] || "general";
-            const defaultTheme = defaultBusinessThemes[determinedBusinessType] || defaultBusinessThemes.general;
-
-            // ✅ FIX: Use ACTUAL business data or proper defaults
+            // ✅ SIMPLE USER OBJECT - Use the NUMERIC businessId
             const cleanUser = {
-                id: userWithBusiness.id,
-                email: userWithBusiness.email,
-                firstName: userWithBusiness.firstName,
-                lastName: userWithBusiness.lastName,
-                role: userWithBusiness.role,
-                permissions: userWithBusiness.permissions || [],
-                lastLogin: userWithBusiness.lastLogin,
-                // Business details
-                associatedBusinessId: business ? business.id : userWithBusiness.businessId,
-                businessName: business ? business.businessName : defaultTheme.name,
-                businessType: business ? (business.businessType?.toLowerCase() || determinedBusinessType) : determinedBusinessType,
-                primaryColor: business ? business.primaryColor : defaultTheme.primaryColor, // Use actual business color or proper default
-                logo: business ? business.logoUrl : null
+                id: user.id,
+                email: user.email,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                role: user.role,
+                permissions: user.permissions || [],
+                lastLogin: user.lastLogin,
+                // Business details - Use NUMERIC businessId
+                businessId: business.businessId, // ✅ This is the NUMBER (e.g., 2)
+                businessUUID: business.id, // Keep UUID for reference
+                businessName: business.businessName,
+                businessType: business.businessType,
+                primaryColor: business.primaryColor,
+                logo: business.logoUrl
             };
 
-            console.log("✅ Final user object:", {
+            console.log("✅ Final user object for login:", {
+                userId: cleanUser.id,
+                name: `${cleanUser.firstName} ${cleanUser.lastName}`,
+                role: cleanUser.role,
+                businessId: cleanUser.businessId, // Should be 2
                 businessName: cleanUser.businessName,
-                businessType: cleanUser.businessType,
-                primaryColor: cleanUser.primaryColor,
-                hasActualBusinessData: !!business,
-                businessSource: business ? "database" : "default theme"
+                businessType: cleanUser.businessType
             });
 
             // JWT Token generation
+            const tokenPayload = {
+                id: user.id,
+                email: user.email,
+                role: user.role,
+                businessId: business.businessId, // ✅ Store NUMERIC ID in token
+                businessUUID: business.id, // Also store UUID for DB queries
+                businessType: business.businessType,
+                primaryColor: business.primaryColor
+            };
+
             const token = jwt.sign(
-                {
-                    userId: userWithBusiness.id,
-                    email: userWithBusiness.email,
-                    role: userWithBusiness.role,
-                    businessId: cleanUser.associatedBusinessId,
-                    businessType: cleanUser.businessType,
-                    primaryColor: cleanUser.primaryColor
-                },
+                tokenPayload,
                 process.env.JWT_SECRET,
                 { expiresIn: '24h' }
             );
@@ -372,9 +355,10 @@ export default function AuthRoutes(storage) {
             otpStore.delete(email);
 
             // Update last login
-            await storage.updateUserLastLogin(userWithBusiness.id);
+            await storage.updateUserLastLogin(user.id);
 
             console.log(`✅ Successful login for user: ${email}`);
+            console.log(`🏪 User is working at: ${business.businessName} (ID: ${business.businessId})`);
             console.log("===== OTP VERIFICATION DEBUG END =====");
 
             res.json({
@@ -543,10 +527,10 @@ export default function AuthRoutes(storage) {
                 });
             }
 
-            // Generate JWT token for password reset
+            // Generate JWT token for password reset - ✅ FIXED: Use 'id' instead of 'userId'
             const resetToken = jwt.sign(
                 {
-                    userId: storedData.userId,
+                    id: storedData.userId,
                     email: email,
                     type: 'password_reset'
                 },

@@ -11,6 +11,9 @@ import AuthRoutes from "./routes/AuthRoutes.js";
 import BusinessRoutes from "./routes/BusinessRoutes.js";
 import path from 'path';
 import { fileURLToPath } from 'url';
+import ProductRoutes from "./routes/kiosk/ProductRoutes.js";
+import TransactionRoutes from "./routes/kiosk/TransactionRoutes.js";
+import MpesaRoutes from "./routes/MpesaRoutes.js";
 
 // Load environment variables
 dotenv.config();
@@ -49,8 +52,11 @@ async function startServer() {
 
         // Pass storage to all routes
         app.use("/api/users", UserManagementRoutes(storage));
-        app.use("/api/auth", AuthRoutes(storage)); 
+        app.use("/api/auth", AuthRoutes(storage));
         app.use("/api/business", BusinessRoutes(storage));
+        app.use("/api/products", ProductRoutes);
+        app.use("/api/transactions", TransactionRoutes);
+        app.use('/api/mpesa', MpesaRoutes);
 
         app.get("/", (req, res) => {
             res.send("WELCOME TO ALVIN API");
