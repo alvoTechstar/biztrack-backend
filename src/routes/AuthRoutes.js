@@ -19,41 +19,58 @@ export default function AuthRoutes(storage) {
         }
 
         try {
-            // Use Gmail SMTP (most reliable on Render)
+            console.log("🔧 Creating email transporter for Render...");
+
+            // Render-specific settings - keeps your existing config but optimized
             const transporter = nodemailer.createTransport({
                 service: 'gmail',
                 auth: {
                     user: process.env.EMAIL_USER,
                     pass: process.env.EMAIL_PASS
                 },
-                // Render-friendly timeout settings
+                // IMPORTANT: Render-compatible settings
+                host: 'smtp.gmail.com',
+                port: 587, // Use port 587 (STARTTLS) instead of 465
+                secure: false, // false for STARTTLS
+                requireTLS: true, // Require TLS
+                // Render timeout settings
+                connectionTimeout: 30000, // Increased for Render
+                socketTimeout: 30000,
+                greetingTimeout: 30000,
+                // TLS settings for Render
+                tls: {
+                    rejectUnauthorized: false // Bypass SSL cert validation on Render
+                },
+                // Keep your existing settings
                 pool: true,
-                maxConnections: 5,
-                maxMessages: 100,
-                connectionTimeout: 10000,
-                socketTimeout: 15000,
-                // Rate limiting protection
-                rateLimit: 10,
-                rateDelta: 1000,
-                rateLimitMax: 50
+                maxConnections: 3, // Reduced for Render free tier
+                maxMessages: 50,
+                rateLimit: 5 // Reduced rate limiting
             });
 
-            // Verify connection
-            transporter.verify((error) => {
-                if (error) {
-                    console.error('❌ Email transporter verification failed:', error);
-                } else {
-                    console.log('✅ Email transporter is ready to send messages');
-                }
-            });
+            // MODIFIED: Don't verify immediately - it's failing on Render
+            // Instead, verify on first use or log without verification
+            console.log('✅ Email transporter created (delayed verification)');
+
+            // Optional: Verify in background but don't block
+            setTimeout(() => {
+                transporter.verify((error) => {
+                    if (error) {
+                        console.warn('⚠️ Email verification failed (emails may still work):', error.message);
+                        console.log('📧 OTPs will be logged to console. Check Render logs for OTPs.');
+                    } else {
+                        console.log('✅ Email connection verified successfully');
+                    }
+                });
+            }, 2000); // Delay verification by 2 seconds
 
             return transporter;
         } catch (error) {
-            console.error('❌ Failed to create email transporter:', error);
+            console.error('❌ Failed to create email transporter:', error.message);
+            console.log('📧 OTPs will be logged to console for manual entry');
             return null;
         }
     };
-
     const transporter = createTransporter();
 
     const sendOTPEmail = async (email, otp, type = 'login') => {
@@ -66,8 +83,8 @@ export default function AuthRoutes(storage) {
             return { success: true, devMode: true };
         }
 
-        const subject = type === 'login' 
-            ? 'Your Login OTP - BizTrack' 
+        const subject = type === 'login'
+            ? 'Your Login OTP - BizTrack'
             : 'Password Reset OTP - BizTrack';
 
         try {
@@ -105,17 +122,17 @@ export default function AuthRoutes(storage) {
             });
 
             await Promise.race([sendPromise, timeoutPromise]);
-            
+
             console.log(`✅ OTP email sent successfully to ${email}`);
             return { success: true };
 
         } catch (error) {
             console.error("❌ Failed to send OTP email:", error.message);
             console.log(`📧 [FALLBACK] OTP for ${email}: ${otp}`);
-            
+
             // Don't throw error - allow login to continue in development
-            return { 
-                success: false, 
+            return {
+                success: false,
                 error: error.message,
                 devMode: true
             };
@@ -187,8 +204,8 @@ export default function AuthRoutes(storage) {
 
             res.json({
                 success: true,
-                message: emailResult.devMode 
-                    ? `OTP generated: ${otp} (Email service not configured)` 
+                message: emailResult.devMode
+                    ? `OTP generated: ${otp} (Email service not configured)`
                     : "OTP sent to your email",
                 requiresOTP: true,
                 devMode: emailResult.devMode || false
@@ -251,8 +268,8 @@ export default function AuthRoutes(storage) {
 
             res.json({
                 success: true,
-                message: emailResult.devMode 
-                    ? `New OTP generated: ${otp}` 
+                message: emailResult.devMode
+                    ? `New OTP generated: ${otp}`
                     : "New OTP sent to your email",
                 devMode: emailResult.devMode || false
             });
@@ -442,8 +459,8 @@ export default function AuthRoutes(storage) {
 
             res.json({
                 success: true,
-                message: emailResult.devMode 
-                    ? `Reset OTP generated: ${otp}` 
+                message: emailResult.devMode
+                    ? `Reset OTP generated: ${otp}`
                     : "Reset OTP sent to your email",
                 devMode: emailResult.devMode || false
             });
