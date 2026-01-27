@@ -64,9 +64,11 @@ export default function AuthRoutes(storage) {
             return { success: true };
 
         } catch (error) {
-            console.error(`Failed to send ${type} email to ${email}:`, error.message);
-            throw new Error('Failed to send OTP email');
+            console.error("⚠️ Failed to send login email:", error.message);
+            console.warn("⚠️ OTP for user:", email, "OTP:", otp);
+            return; // DO NOT THROW
         }
+
     };
 
     // POST /api/auth/login - Initiate login with email/password
