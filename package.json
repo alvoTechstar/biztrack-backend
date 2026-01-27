@@ -21,7 +21,10 @@
     "mongodb": "^6.19.0",
     "mongoose": "^8.18.1",
     "multer": "^2.0.2",
+    "netlify-cli": "^23.13.5",
+    "netlify-lambda": "^2.0.16",
     "nodemailer": "^7.0.6",
+    "serverless-http": "^4.0.0",
     "zod": "^4.1.9"
   },
   "devDependencies": {

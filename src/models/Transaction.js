@@ -87,9 +87,18 @@ const transactionSchema = new mongoose.Schema({
         enum: ['cash', 'mpesa', 'debt'],
         required: true
     },
+    originalPaymentMethod: {
+        type: String,
+        enum: ['cash', 'mpesa', 'debt']
+    },
     status: {
         type: String,
         enum: ['completed', 'pending', 'failed'],
+        default: 'pending'
+    },
+    paymentStatus: {
+        type: String,
+        enum: ['paid', 'pending', 'failed'],
         default: 'pending'
     },
 
@@ -118,6 +127,36 @@ const transactionSchema = new mongoose.Schema({
     notes: {
         type: String
     },
+    debtPaid: {
+        type: Boolean,
+        default: false
+    },
+    debtPaymentMethod: {
+        type: String,
+        enum: ['cash', 'mpesa', null]
+    },
+    debtPaymentDate: {
+        type: Date
+    },
+
+    // Payment date fields - NEW
+    datePaid: {
+        type: Date
+    },
+    paidAt: {
+        type: Date
+    },
+    paymentDate: {
+        type: Date
+    },
+    completedAt: {
+        type: Date
+    },
+
+    // Payment details - NEW
+    paymentDetails: {
+        type: mongoose.Schema.Types.Mixed
+    },
 
     // General transaction info
     timestamp: {
@@ -136,6 +175,7 @@ transactionSchema.index({ businessId: 1, timestamp: -1 });
 transactionSchema.index({ shopkeeperId: 1, timestamp: -1 });
 transactionSchema.index({ businessId: 1, status: 1 });
 transactionSchema.index({ businessId: 1, paymentMethod: 1 });
+transactionSchema.index({ businessId: 1, debtPaid: 1 });
 
 const Transaction = mongoose.model('Transaction', transactionSchema);
 

@@ -16,7 +16,7 @@ export const initiateStkPush = async (req, res) => {
         if (!phone || !amount || !businessIdentifier || !transactionId) {
             return res.status(400).json({
                 success: false,
-                message: 'Phone, amount, kioskId/businessId, and transactionId are required'
+                message: 'Phone, amount, businessId, and transactionId are required'
             });
         }
 

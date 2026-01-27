@@ -178,7 +178,7 @@ export const getDailyReportByBusiness = async (req, res) => {
     const completedTransactions = transactions.filter(t => t.status === 'completed');
     const cashTransactions = completedTransactions.filter(t => t.paymentMethod === 'cash');
     const mpesaTransactions = completedTransactions.filter(t => t.paymentMethod === 'mpesa');
-    const debtTransactions = transactions.filter(t => t.paymentMethod === 'debt');
+    const debtTransactions = transactions.filter(t => t.paymentMethod === 'debt' || t.type === 'debt');
     
     // Calculate totals
     const totalRevenue = completedTransactions.reduce((sum, t) => 
@@ -194,11 +194,11 @@ export const getDailyReportByBusiness = async (req, res) => {
     );
     
     const outstandingDebt = debtTransactions
-      .filter(t => t.status === 'pending')
+      .filter(t => t.status === 'pending' || !t.debtPaid)
       .reduce((sum, t) => sum + (t.totalAmount || 0), 0);
     
     const totalDebtCollected = debtTransactions
-      .filter(t => t.status === 'completed')
+      .filter(t => t.status === 'completed' && t.debtPaid)
       .reduce((sum, t) => sum + (t.totalAmount || 0), 0);
     
     // Product sales summary
@@ -239,7 +239,7 @@ export const getDailyReportByBusiness = async (req, res) => {
         outstandingDebt,
         totalDebtCollected,
         debtRecoveryRate: debtTransactions.length > 0 
-          ? ((debtTransactions.filter(t => t.status === 'completed').length / debtTransactions.length) * 100).toFixed(1)
+          ? ((debtTransactions.filter(t => t.status === 'completed' && t.debtPaid).length / debtTransactions.length) * 100).toFixed(1)
           : 0,
         topProducts
       }
@@ -284,6 +284,11 @@ export const updateTransaction = async (req, res) => {
     const { id } = req.params;
     const updateData = req.body;
 
+    console.log('🔄 Update transaction request:', {
+      id,
+      updateData
+    });
+
     // Find the transaction
     const transaction = await Transaction.findById(id);
     
@@ -294,8 +299,17 @@ export const updateTransaction = async (req, res) => {
       });
     }
 
+    console.log('📋 Current transaction:', {
+      id: transaction._id,
+      transactionId: transaction.transactionId,
+      status: transaction.status,
+      paymentMethod: transaction.paymentMethod,
+      type: transaction.type,
+      debtPaid: transaction.debtPaid
+    });
+
     // Validate that this is a debt transaction
-    if (transaction.paymentMethod !== 'debt' && transaction.originalPaymentMethod !== 'debt') {
+    if (transaction.type !== 'debt' && transaction.paymentMethod !== 'debt' && !transaction.originalPaymentMethod) {
       return res.status(400).json({
         success: false,
         message: 'Only debt transactions can be updated for payment'
@@ -303,7 +317,7 @@ export const updateTransaction = async (req, res) => {
     }
 
     // Check if already paid
-    if (transaction.status === 'completed' || transaction.debtPaid) {
+    if (transaction.status === 'completed' && transaction.debtPaid) {
       return res.status(400).json({
         success: false,
         message: 'This debt has already been paid'
@@ -324,27 +338,65 @@ export const updateTransaction = async (req, res) => {
       updateData.paymentStatus = updateData.paymentStatus.toLowerCase();
     }
 
-    // Prepare update data
+    if (updateData.debtPaymentMethod) {
+      updateData.debtPaymentMethod = updateData.debtPaymentMethod.toLowerCase();
+    }
+
+    // Get the payment date - prioritize what's sent from frontend
+    const paymentDate = updateData.datePaid || 
+                       updateData.paidAt || 
+                       updateData.paymentDate || 
+                       updateData.completedAt || 
+                       new Date();
+
+    console.log('💰 Payment date determined:', paymentDate);
+
+    // Store original payment method before it becomes a regular payment
+    const originalPaymentMethod = transaction.originalPaymentMethod || transaction.paymentMethod;
+
+    // Prepare update data - set ALL payment date fields
     const updates = {
       status: 'completed',
       paymentStatus: 'paid',
       debtPaid: true,
+      originalPaymentMethod: originalPaymentMethod,
+      datePaid: paymentDate,
+      paidAt: paymentDate,
+      paymentDate: paymentDate,
+      completedAt: paymentDate,
       updatedAt: new Date(),
       ...updateData
     };
 
-    // Add payment date if not provided
-    if (!updates.datePaid && !updates.paidAt) {
-      updates.datePaid = new Date();
-      updates.paidAt = new Date();
+    // If payment details are provided, store them
+    if (updateData.paymentDetails) {
+      updates.paymentDetails = updateData.paymentDetails;
     }
+
+    // If debt payment method is provided, store it
+    if (updateData.debtPaymentMethod) {
+      updates.debtPaymentMethod = updateData.debtPaymentMethod;
+      updates.debtPaymentDate = paymentDate;
+    }
+
+    console.log('📤 Updating with:', updates);
 
     // Update the transaction
     const updatedTransaction = await Transaction.findByIdAndUpdate(
       id,
       { $set: updates },
-      { new: true, runValidators: true }
+      { new: true, runValidators: false } // Disable validators to allow flexible updates
     );
+
+    console.log('✅ Transaction updated:', {
+      id: updatedTransaction._id,
+      transactionId: updatedTransaction.transactionId,
+      status: updatedTransaction.status,
+      paymentMethod: updatedTransaction.paymentMethod,
+      debtPaid: updatedTransaction.debtPaid,
+      datePaid: updatedTransaction.datePaid,
+      paidAt: updatedTransaction.paidAt
+    });
 
     res.json({
       success: true,
@@ -352,7 +404,7 @@ export const updateTransaction = async (req, res) => {
       transaction: updatedTransaction
     });
   } catch (error) {
-    console.error('Error updating transaction:', error);
+    console.error('❌ Error updating transaction:', error);
     
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map(err => err.message);

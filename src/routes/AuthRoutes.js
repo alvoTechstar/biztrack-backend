@@ -95,6 +95,18 @@ export default function AuthRoutes(storage) {
                 });
             }
 
+            // ✅ CHECK USER STATUS - Only allow active users to login
+            const userStatus = (user.status || '').toLowerCase();
+            if (userStatus !== 'active') {
+                console.log(`❌ Login attempt blocked: User account is ${user.status || 'inactive'} for email ${email}`);
+                return res.status(403).json({
+                    success: false,
+                    message: "Your account has been disabled. Please contact your administrator."
+                });
+            }
+
+            console.log(`✅ User status check passed: ${email} is ACTIVE`);
+
             if (!user.password) {
                 console.log(`❌ Login attempt failed: No password set for user ${email}`);
                 return res.status(401).json({
@@ -176,6 +188,26 @@ export default function AuthRoutes(storage) {
                 });
             }
 
+            // ✅ VERIFY USER IS STILL ACTIVE before resending OTP
+            const user = await storage.getUserByEmail(email);
+            if (!user) {
+                otpStore.delete(email);
+                return res.status(404).json({
+                    success: false,
+                    message: "User not found. Please login again."
+                });
+            }
+
+            const userStatus = (user.status || '').toLowerCase();
+            if (userStatus !== 'active') {
+                console.log(`❌ Resend OTP blocked: User account is ${user.status || 'inactive'} for email ${email}`);
+                otpStore.delete(email);
+                return res.status(403).json({
+                    success: false,
+                    message: "Your account has been disabled. Please contact your administrator."
+                });
+            }
+
             const otp = generateOTP();
             const otpExpiry = Date.now() + 10 * 60 * 1000;
 
@@ -214,9 +246,6 @@ export default function AuthRoutes(storage) {
     router.post("/verify-otp", async (req, res) => {
         try {
             const { email, otp } = req.body;
-
-            console.log("🔍 ===== OTP VERIFICATION DEBUG START =====");
-            console.log("🔍 Verifying OTP for:", email);
 
             if (!email || !otp) {
                 return res.status(400).json({
@@ -257,6 +286,7 @@ export default function AuthRoutes(storage) {
             console.log("🔍 User data from database:", {
                 id: user?.id,
                 email: user?.email,
+                status: user?.status,
                 associatedBusinessId: user?.associatedBusinessId,
                 institutionId: user?.institutionId,
                 role: user?.role,
@@ -271,6 +301,19 @@ export default function AuthRoutes(storage) {
                     message: "User not found"
                 });
             }
+
+            // ✅ FINAL STATUS CHECK before completing login
+            const userStatus = (user.status || '').toLowerCase();
+            if (userStatus !== 'active') {
+                console.log(`❌ Login blocked at OTP verification: User account is ${user.status || 'inactive'} for email ${email}`);
+                otpStore.delete(email);
+                return res.status(403).json({
+                    success: false,
+                    message: "Your account has been disabled. Please contact your administrator."
+                });
+            }
+
+            console.log(`✅ Final status check passed: ${email} is ACTIVE`);
 
             // Get business data using associatedBusinessId (UUID)
             let business = null;
@@ -315,6 +358,7 @@ export default function AuthRoutes(storage) {
                 firstName: user.firstName,
                 lastName: user.lastName,
                 role: user.role,
+                status: user.status, // Include status in response
                 permissions: user.permissions || [],
                 lastLogin: user.lastLogin,
                 // Business details - Use NUMERIC businessId
@@ -330,6 +374,7 @@ export default function AuthRoutes(storage) {
                 userId: cleanUser.id,
                 name: `${cleanUser.firstName} ${cleanUser.lastName}`,
                 role: cleanUser.role,
+                status: cleanUser.status,
                 businessId: cleanUser.businessId, // Should be 2
                 businessName: cleanUser.businessName,
                 businessType: cleanUser.businessType
@@ -340,6 +385,7 @@ export default function AuthRoutes(storage) {
                 id: user.id,
                 email: user.email,
                 role: user.role,
+                status: user.status, // Include status in token
                 businessId: business.businessId, // ✅ Store NUMERIC ID in token
                 businessUUID: business.id, // Also store UUID for DB queries
                 businessType: business.businessType,
@@ -357,7 +403,7 @@ export default function AuthRoutes(storage) {
             // Update last login
             await storage.updateUserLastLogin(user.id);
 
-            console.log(`✅ Successful login for user: ${email}`);
+            console.log(`✅ Successful login for ACTIVE user: ${email}`);
             console.log(`🏪 User is working at: ${business.businessName} (ID: ${business.businessId})`);
             console.log("===== OTP VERIFICATION DEBUG END =====");
 
@@ -399,6 +445,12 @@ export default function AuthRoutes(storage) {
                 });
             }
 
+            // ✅ CHECK USER STATUS - Allow password reset for inactive users
+            // (They might need to reset password to reactivate their account)
+            // But log it for security purposes
+            const userStatus = (user.status || '').toLowerCase();
+            console.log(`📧 Password reset requested for user ${email} with status: ${user.status}`);
+
             const otp = generateOTP();
             const otpExpiry = Date.now() + 10 * 60 * 1000;
 
@@ -406,7 +458,8 @@ export default function AuthRoutes(storage) {
                 otp,
                 expiry: otpExpiry,
                 userId: user.id,
-                email: email
+                email: email,
+                userStatus: user.status // Store status for reference
             });
 
             await sendOTPEmail(email, otp, 'reset');
@@ -461,7 +514,8 @@ export default function AuthRoutes(storage) {
                 otp,
                 expiry: otpExpiry,
                 userId: storedData.userId,
-                email: email
+                email: email,
+                userStatus: storedData.userStatus
             });
 
             await sendOTPEmail(email, otp, 'reset');
@@ -532,7 +586,8 @@ export default function AuthRoutes(storage) {
                 {
                     id: storedData.userId,
                     email: email,
-                    type: 'password_reset'
+                    type: 'password_reset',
+                    userStatus: storedData.userStatus // Include status for logging
                 },
                 process.env.JWT_SECRET,
                 { expiresIn: '10m' }
@@ -540,7 +595,7 @@ export default function AuthRoutes(storage) {
 
             otpStore.delete(`reset_${email}`);
 
-            console.log(`✅ Password reset OTP verified successfully for: ${email}`);
+            console.log(`✅ Password reset OTP verified successfully for: ${email} (Status: ${storedData.userStatus})`);
 
             res.json({
                 success: true,
@@ -618,9 +673,14 @@ export default function AuthRoutes(storage) {
             console.log("👤 User found:", {
                 id: user.id,
                 email: user.email,
+                status: user.status,
                 currentPassword: user.password ? `${user.password.substring(0, 20)}...` : 'null',
                 isCurrentPasswordHashed: user.password ? user.password.startsWith('$2b$') : false
             });
+
+            // Note: We allow password reset for inactive users
+            // This gives admins/users a way to reset passwords even if account is disabled
+            console.log(`📝 Password reset proceeding for user with status: ${user.status}`);
 
             // 4. Check Against Old Password
             if (user.password) {

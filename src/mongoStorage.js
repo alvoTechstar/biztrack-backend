@@ -12,15 +12,15 @@ const userSchema = new mongoose.Schema({
   firstName: { type: String, required: true },
   lastName: { type: String, required: true },
   phone: { type: String, required: true },
-  role: { 
-    type: String, 
+  role: {
+    type: String,
     enum: [
       "Super_Admin", "Biztrack_ADMIN",
       "Hotel_Admin", "Hotel_Cashier", "Hotel_Waiter",
-      "Kiosk_Admin", "Kiosk_Shopkeeper", 
+      "Kiosk_Admin", "Kiosk_Shopkeeper",
       "Hospital_Admin", "Doctor", "Nurse", "Lab_Technician", "Receptionist", "Pharmacist",
     ],
-    default: "Staff" 
+    default: "Staff"
   },
   businessName: { type: String },
   associatedBusinessId: { type: String },
@@ -45,8 +45,8 @@ const businessSchema = new mongoose.Schema({
   address: { type: String, default: "" },
   website: { type: String, default: "" },
   description: { type: String, default: "" },
-  logoUrl: { type: String, default: "" }, 
-  primaryColor: { type: String, default: "#000000" }, 
+  logoUrl: { type: String, default: "" },
+  primaryColor: { type: String, default: "#000000" },
   status: { type: String, default: "active" },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
@@ -72,11 +72,11 @@ export class MongoStorage {
       console.log("🔧 Checking for default business and admin...");
 
       const existingBusiness = await this.Business.findOne({ businessName: "BizTrack Application" });
-      let businessId;
+      let business;
 
       if (existingBusiness) {
         console.log('✅ Default business already exists');
-        businessId = existingBusiness.businessId;
+        business = existingBusiness;
       } else {
         const defaultBusiness = new this.Business({
           id: randomUUID(),
@@ -90,13 +90,13 @@ export class MongoStorage {
           address: "Nairobi, Kenya",
           website: "https://biztrack.com",
           description: "Default BizTrack System Business",
-          logoUrl: "/assets/biztrack-logo.png",
-          primaryColor: "#4F46E5", 
+          logoUrl: "https://stage.biztrack.co.za/",
+          primaryColor: "#4F46E5",
           status: "active",
         });
 
         await defaultBusiness.save();
-        businessId = defaultBusiness.businessId;
+        business = defaultBusiness;
         console.log('✅ Default business created successfully!');
       }
 
@@ -115,8 +115,8 @@ export class MongoStorage {
           phone: "0711000001",
           role: "Super_Admin",
           businessName: "BizTrack Application",
-          associatedBusinessId: businessId.toString(),
-          institutionId: businessId.toString(),
+          associatedBusinessId: business.id,  // Use UUID, not businessId!
+          institutionId: business.id,         // Use UUID here too
           institutionName: "BizTrack Application",
           status: "ACTIVE",
           permissions: ["read", "write", "delete", "admin", "super_admin"],
@@ -141,17 +141,17 @@ export class MongoStorage {
   }
 
   // === USER METHODS ===
-  
+
   async getUser(id) {
     try {
       // Try to find by custom id first
       let user = await this.User.findOne({ id });
-      
+
       // If not found, try by MongoDB _id
       if (!user) {
         user = await this.User.findById(id);
       }
-      
+
       return user ?? undefined;
     } catch (error) {
       console.error('Error getting user:', error);
@@ -183,7 +183,7 @@ export class MongoStorage {
     try {
       const saltRounds = 10;
       const hashedPassword = await bcrypt.hash(userData.password, saltRounds);
-      
+
       const newUser = new this.User({
         ...userData,
         id: randomUUID(),
@@ -201,29 +201,29 @@ export class MongoStorage {
   async updateUserPassword(userId, newPassword) {
     try {
       console.log("🔐 Updating password for user ID:", userId);
-      
+
       // Try to find user by custom id field first
       let user = await this.User.findOne({ id: userId });
-      
+
       // If not found by custom id, try by MongoDB _id
       if (!user) {
         user = await this.User.findById(userId);
       }
-      
+
       if (!user) {
         console.log("❌ User not found with ID:", userId);
         return undefined;
       }
 
       console.log("✅ User found:", user.email);
-      
+
       // Update the password directly on the user object and save
       user.password = newPassword;
       user.updatedAt = new Date();
-      
+
       const result = await user.save();
       console.log("✅ Password updated successfully for:", user.email);
-      
+
       return result;
     } catch (error) {
       console.error('❌ Error updating user password:', error);
@@ -235,7 +235,7 @@ export class MongoStorage {
     try {
       const dataToUpdate = { ...updateData };
       delete dataToUpdate.password;
-      
+
       const result = await this.User.findOneAndUpdate(
         { id },
         { ...dataToUpdate, updatedAt: new Date() },
@@ -276,11 +276,11 @@ export class MongoStorage {
         { businessId: 1 },
         { sort: { businessId: -1 } }
       );
-      
+
       if (!highestBusiness) {
         return 1;
       }
-      
+
       return highestBusiness.businessId + 1;
     } catch (error) {
       console.error('Error generating business ID:', error);
@@ -291,25 +291,25 @@ export class MongoStorage {
 
   async createBusiness(businessData) {
     console.log("📝 Creating business with data:", businessData);
-    
+
     const businessId = await this.generateBusinessId();
     console.log("🔢 Generated Business ID:", businessId);
-    
+
     const newBusiness = new this.Business({
       ...businessData,
       id: randomUUID(),
       businessId,
     });
-    
+
     await newBusiness.save();
     return newBusiness;
   }
-  
+
   async getBusinessByRegistrationNumber(regNumber) {
     const business = await this.Business.findOne({ registrationNumber: regNumber });
     return business ?? undefined;
   }
-  
+
   async getBusinessByName(name) {
     const business = await this.Business.findOne({ businessName: name });
     return business ?? undefined;
@@ -320,9 +320,73 @@ export class MongoStorage {
     return business ?? undefined;
   }
 
+  // FIXED mongoStorage.js - Add/Update these methods
+
+  // === BUSINESS METHODS ===
+
+  async getBusiness(identifier) {
+    try {
+      console.log('🔍 getBusiness called with:', identifier, typeof identifier);
+
+      // Try 1: Find by UUID (id field)
+      let business = await this.Business.findOne({ id: identifier });
+      if (business) {
+        console.log('✅ Found business by UUID');
+        return business;
+      }
+
+      // Try 2: Find by numeric businessId
+      const businessIdNum = parseInt(identifier, 10);
+      if (!isNaN(businessIdNum)) {
+        business = await this.Business.findOne({ businessId: businessIdNum });
+        if (business) {
+          console.log('✅ Found business by numeric businessId');
+          return business;
+        }
+      }
+
+      // Try 3: Find by string businessId (just in case)
+      business = await this.Business.findOne({ businessId: identifier });
+      if (business) {
+        console.log('✅ Found business by string businessId');
+        return business;
+      }
+
+      console.log('❌ Business not found with identifier:', identifier);
+      return undefined;
+    } catch (error) {
+      console.error('❌ Error in getBusiness:', error);
+      return undefined;
+    }
+  }
+
+
+  // You already have getBusinessByBusinessId, but let's make sure it's correct
   async getBusinessByBusinessId(businessId) {
-    const business = await this.Business.findOne({ businessId });
-    return business ?? undefined;
+    try {
+      console.log('🔍 getBusinessByBusinessId called with:', businessId, typeof businessId);
+
+      // Make sure it's a number
+      const numericId = Number(businessId);
+      if (isNaN(numericId)) {
+        console.log('❌ Not a valid number:', businessId);
+        return undefined;
+      }
+
+      const business = await this.Business.findOne({ businessId: numericId });
+      console.log('✅ Business found:', !!business);
+      if (business) {
+        console.log('Business details:', {
+          id: business.id,
+          businessId: business.businessId,
+          businessName: business.businessName
+        });
+      }
+      return business ?? undefined;
+    } catch (error) {
+      console.error('❌ Error in getBusinessByBusinessId:', error);
+      return undefined;
+    }
   }
 
   async getBusinesses() {
@@ -334,7 +398,7 @@ export class MongoStorage {
     delete dataToUpdate.registrationNumber;
     delete dataToUpdate.owner;
     delete dataToUpdate.logoFile;
-    
+
     const result = await this.Business.findOneAndUpdate(
       { id },
       { ...dataToUpdate, updatedAt: new Date() },
@@ -349,10 +413,32 @@ export class MongoStorage {
   }
 
   // === UTILITY METHODS ===
-  
-  async getUserByBusinessId(businessId) {
-    const user = await this.User.findOne({ associatedBusinessId: businessId.toString() });
-    return user ?? undefined;
+
+  async getBusinessByBusinessId(businessId) {
+    console.log('🔍 getBusinessByBusinessId called with:', businessId, typeof businessId);
+
+    // Make sure it's a number
+    const numericId = Number(businessId);
+    if (isNaN(numericId)) {
+      console.log('❌ Not a valid number:', businessId);
+      return undefined;
+    }
+
+    try {
+      const business = await this.Business.findOne({ businessId: numericId });
+      console.log('✅ Business found:', !!business);
+      if (business) {
+        console.log('Business details:', {
+          id: business.id,
+          businessId: business.businessId,
+          businessName: business.businessName
+        });
+      }
+      return business ?? undefined;
+    } catch (error) {
+      console.error('❌ Error in getBusinessByBusinessId:', error);
+      return undefined;
+    }
   }
 
   async getBusinessUsers(businessId) {
@@ -363,7 +449,7 @@ export class MongoStorage {
     try {
       const result = await this.User.findOneAndUpdate(
         { id: userId },
-        { 
+        {
           lastLogin: new Date().toISOString(),
           updatedAt: new Date()
         },
@@ -374,6 +460,23 @@ export class MongoStorage {
       console.error('Error updating user last login:', error);
       throw error;
     }
+  }
+  // Add this method to your MongoStorage class
+  async getBusinessByIdentifier(identifier) {
+    // Try by numeric businessId first
+    const businessIdNum = parseInt(identifier, 10);
+    if (!isNaN(businessIdNum)) {
+      const businessByNumericId = await this.Business.findOne({ businessId: businessIdNum });
+      if (businessByNumericId) return businessByNumericId;
+    }
+    const businessByUUID = await this.Business.findOne({ id: identifier });
+    if (businessByUUID) return businessByUUID;
+    const businessByReg = await this.Business.findOne({ registrationNumber: identifier });
+    if (businessByReg) return businessByReg;
+    const businessByName = await this.Business.findOne({ businessName: identifier });
+    if (businessByName) return businessByName;
+
+    return undefined;
   }
 
   async migrateDefaultBusiness() {

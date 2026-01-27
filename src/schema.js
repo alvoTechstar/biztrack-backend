@@ -1,32 +1,71 @@
-// src/schemas/index.js
+// src/schemas/index.js - FIXED USER SCHEMA WITH PROPER ZOD SYNTAX
 import { z } from "zod";
+
+// --- Custom validator for logo URL ---
+const logoUrlSchema = z.string()
+  .refine(
+    (value) => {
+      // Accept empty string
+      if (value === '') return true;
+
+      // Accept null
+      if (value === null) return true;
+
+      // Accept undefined
+      if (value === undefined) return true;
+
+      // Accept relative paths starting with /assets/logos/
+      if (value.startsWith('/assets/logos/')) return true;
+
+      // Accept absolute URLs
+      try {
+        new URL(value);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    {
+      message: 'Logo URL must be a valid URL or a relative path starting with /assets/logos/'
+    }
+  )
+  .optional()
+  .default('/assets/logos/default_logo.svg');
+
+// ------------------------------------------
 
 // --- User Schemas ---
 
 export const userSchema = z.object({
-  id: z.string().optional(),
+  id: z.string().optional(), // UUID - auto-generated
   username: z.string().min(1, "Username is required"),
+  email: z.string().email("Invalid email format"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
   firstName: z.string().min(1, "First name is required"),
   lastName: z.string().min(1, "Last name is required"),
-  email: z.string().email("Invalid email format"),
-  phone: z.string().min(1, "Phone number is required"),
-  password: z.string().min(6, "Password must be at least 6 characters long").optional(),
-  // Updated role enum to match your frontend roles
+  phone: z.string().min(1, "Phone is required"),
   role: z.enum([
-    "Super_Admin", 
-    "Biztrack_ADMIN",
-    "Hotel_Admin", "Hotel_Cashier", "Hotel_Waiter",
-    "Kiosk_Admin", "Kiosk_Shopkeeper", 
+    "Super_Admin", "Biztrack_ADMIN",
+    "Hotel_Admin", "Hotel_Cashier", "Hotel_Waiter", "Hotel_Manager", "Hotel_Receptionist", "Hotel_Housekeeping",
+    "Kiosk_Admin", "Kiosk_Shopkeeper",
     "Hospital_Admin", "Doctor", "Nurse", "Lab_Technician", "Receptionist", "Pharmacist",
-  ]).default("Staff"),
-  businessName: z.string().optional().default(""),
-  associatedBusinessId: z.string().optional().default(""),
-  // Add institutionId to match your form
-  institutionId: z.string().optional().default(""),
-  institutionName: z.string().optional().default(""),
+    "Restaurant_Admin", "Restaurant_Manager", "Restaurant_Waiter", "Restaurant_Chef",
+    "Retail_Admin", "Retail_Manager", "Retail_Cashier", "Retail_Sales_Associate",
+  ]).default("Kiosk_Shopkeeper"),
+  
+  // CRITICAL: Store BOTH numeric and UUID business IDs for compatibility
+  businessId: z.number().int().positive().optional(), // Numeric business ID
+  businessUUID: z.string().uuid().optional(), // UUID business ID
+  
+  // Legacy/compatibility fields
+  businessName: z.string().optional(),
+  associatedBusinessId: z.string().optional(), // Can be numeric string or UUID
+  institutionId: z.string().optional(), // Can be numeric string or UUID
+  institutionName: z.string().optional(),
+  
   status: z.enum(["ACTIVE", "INACTIVE"]).default("ACTIVE"),
-  permissions: z.array(z.string()).optional().default(["read", "write", "delete"]),
-  lastLogin: z.string().optional().default("Never"),
+  permissions: z.array(z.string()).default(["read", "write", "delete"]),
+  lastLogin: z.string().default("Never"),
   createdAt: z.date().default(() => new Date()),
   updatedAt: z.date().default(() => new Date()),
 });
@@ -56,8 +95,8 @@ export const businessSchema = z.object({
   id: z.string().optional(),
   businessId: z.number().int().positive("Business ID must be a positive number"),
   businessName: z.string().min(1, "Business name is required"),
-  registrationNumber: z.string().min(1, "Registration number is required"), 
-  businessType: z.enum(["Hotel", "Kiosk", "Hospital", "Retail", "Other"], {
+  registrationNumber: z.string().min(1, "Registration number is required"),
+  businessType: z.enum(["Hotel", "Kiosk", "Hospital", "Retail", "Restaurant", "Other"], {
     errorMap: () => ({ message: "Business type is required and must be one of the allowed types" })
   }),
   email: z.string().email("Invalid email format"),
@@ -65,7 +104,7 @@ export const businessSchema = z.object({
   address: z.string().optional().default(""),
   website: z.string().url("Invalid URL format").or(z.literal("")).or(z.literal(null)).optional().default(""),
   description: z.string().optional().default(""),
-  logoUrl: z.string().url("Invalid URL format").or(z.literal("")).or(z.literal(null)).optional().default(""),
+  logoUrl: logoUrlSchema, // Use custom validator instead of .url()
   primaryColor: z.string()
     .regex(/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, "Invalid hex color code")
     .default("#000000"),
@@ -84,16 +123,15 @@ export const insertBusinessSchema = businessSchema.omit({
   logoFile: z.any().optional(),
 });
 
+// Update business schema (allow partial updates, including registrationNumber and owner)
 export const updateBusinessSchema = businessSchema.omit({
   id: true,
   businessId: true, // businessId cannot be updated
-  registrationNumber: true,
-  owner: true,
   createdAt: true,
   updatedAt: true,
 }).extend({
   logoFile: z.any().optional(),
-}).partial();
+}).partial(); // All fields optional for updates
 
 export const Business = businessSchema;
 export const InsertBusiness = insertBusinessSchema;
