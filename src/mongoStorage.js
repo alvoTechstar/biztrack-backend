@@ -52,19 +52,44 @@ const businessSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
+// Add OTP Schema
+const otpSchema = new mongoose.Schema({
+  id: { type: String, required: true, unique: true, default: () => randomUUID() },
+  email: { type: String, required: true, index: true },
+  otp: { type: String, required: true },
+  type: { 
+    type: String, 
+    required: true, 
+    enum: ["login", "reset", "verification"],
+    default: "login" 
+  },
+  userId: { type: String, index: true },
+  expiresAt: { type: Date, required: true, index: true },
+  used: { type: Boolean, default: false },
+  attempts: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now, index: true }
+});
+
+// Create indexes for better performance
+otpSchema.index({ email: 1, type: 1, used: 1 });
+otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // Auto-delete expired OTPs
+
 // Create Mongoose models
 const User = mongoose.model('User', userSchema);
 const Business = mongoose.model('Business', businessSchema);
+const OTP = mongoose.model('OTP', otpSchema);
 
 export class MongoStorage {
   constructor() {
     this.User = User;
     this.Business = Business;
+    this.OTP = OTP;
   }
 
   async initialize() {
     await this.createDefaultSetup();
-    console.log("MongoStorage initialized with Mongoose - Users and Businesses only");
+    await this.cleanupExpiredOTPs();
+    console.log("MongoStorage initialized with OTP collection");
   }
 
   async createDefaultSetup() {
@@ -115,8 +140,8 @@ export class MongoStorage {
           phone: "0711000001",
           role: "Super_Admin",
           businessName: "BizTrack Application",
-          associatedBusinessId: business.id,  // Use UUID, not businessId!
-          institutionId: business.id,         // Use UUID here too
+          associatedBusinessId: business.id,
+          institutionId: business.id,
           institutionName: "BizTrack Application",
           status: "ACTIVE",
           permissions: ["read", "write", "delete", "admin", "super_admin"],
@@ -140,18 +165,126 @@ export class MongoStorage {
     }
   }
 
+  // === OTP METHODS ===
+
+  async createOTP(email, otp, type, userId = null) {
+    try {
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      
+      // Invalidate any existing OTPs for this email and type
+      await this.OTP.updateMany(
+        { email, type, used: false },
+        { used: true }
+      );
+
+      const newOTP = new this.OTP({
+        email,
+        otp,
+        type,
+        userId,
+        expiresAt
+      });
+
+      await newOTP.save();
+      console.log(`✅ OTP created for ${email} (${type}): ${otp}`);
+      return newOTP.id;
+    } catch (error) {
+      console.error('❌ Error creating OTP:', error);
+      throw error;
+    }
+  }
+
+  async getValidOTP(email, otp, type = null) {
+    try {
+      const now = new Date();
+      const query = {
+        email,
+        otp,
+        expiresAt: { $gt: now },
+        used: false
+      };
+
+      if (type) {
+        query.type = type;
+      }
+
+      const foundOTP = await this.OTP.findOne(query).sort({ createdAt: -1 });
+      
+      if (foundOTP) {
+        // Increment attempts
+        foundOTP.attempts += 1;
+        await foundOTP.save();
+      }
+
+      return foundOTP ?? undefined;
+    } catch (error) {
+      console.error('❌ Error getting OTP:', error);
+      return undefined;
+    }
+  }
+
+  async markOTPAsUsed(email, otp = null) {
+    try {
+      const query = { email, used: false };
+      if (otp) {
+        query.otp = otp;
+      }
+
+      const result = await this.OTP.updateMany(
+        query,
+        { used: true }
+      );
+
+      return result.modifiedCount > 0;
+    } catch (error) {
+      console.error('❌ Error marking OTP as used:', error);
+      return false;
+    }
+  }
+
+  async getRecentOTPAttempts(email, minutes = 10) {
+    try {
+      const timeLimit = new Date(Date.now() - minutes * 60 * 1000);
+      const count = await this.OTP.countDocuments({
+        email,
+        createdAt: { $gt: timeLimit },
+        used: false
+      });
+      return count;
+    } catch (error) {
+      console.error('❌ Error getting OTP attempts:', error);
+      return 0;
+    }
+  }
+
+  async cleanupExpiredOTPs() {
+    try {
+      const now = new Date();
+      const result = await this.OTP.deleteMany({
+        $or: [
+          { expiresAt: { $lte: now } },
+          { used: true }
+        ]
+      });
+      
+      if (result.deletedCount > 0) {
+        console.log(`🧹 Cleaned up ${result.deletedCount} expired/used OTPs`);
+      }
+      return result.deletedCount;
+    } catch (error) {
+      console.error('❌ Error cleaning up OTPs:', error);
+      return 0;
+    }
+  }
+
   // === USER METHODS ===
 
   async getUser(id) {
     try {
-      // Try to find by custom id first
       let user = await this.User.findOne({ id });
-
-      // If not found, try by MongoDB _id
       if (!user) {
         user = await this.User.findById(id);
       }
-
       return user ?? undefined;
     } catch (error) {
       console.error('Error getting user:', error);
@@ -202,10 +335,7 @@ export class MongoStorage {
     try {
       console.log("🔐 Updating password for user ID:", userId);
 
-      // Try to find user by custom id field first
       let user = await this.User.findOne({ id: userId });
-
-      // If not found by custom id, try by MongoDB _id
       if (!user) {
         user = await this.User.findById(userId);
       }
@@ -215,9 +345,6 @@ export class MongoStorage {
         return undefined;
       }
 
-      console.log("✅ User found:", user.email);
-
-      // Update the password directly on the user object and save
       user.password = newPassword;
       user.updatedAt = new Date();
 
@@ -263,6 +390,23 @@ export class MongoStorage {
       return await this.User.find();
     } catch (error) {
       console.error('Error getting all users:', error);
+      throw error;
+    }
+  }
+
+  async updateUserLastLogin(userId) {
+    try {
+      const result = await this.User.findOneAndUpdate(
+        { id: userId },
+        {
+          lastLogin: new Date().toISOString(),
+          updatedAt: new Date()
+        },
+        { new: true }
+      );
+      return result ?? undefined;
+    } catch (error) {
+      console.error('Error updating user last login:', error);
       throw error;
     }
   }
@@ -315,27 +459,16 @@ export class MongoStorage {
     return business ?? undefined;
   }
 
-  async getBusiness(id) {
-    const business = await this.Business.findOne({ id });
-    return business ?? undefined;
-  }
-
-  // FIXED mongoStorage.js - Add/Update these methods
-
-  // === BUSINESS METHODS ===
-
   async getBusiness(identifier) {
     try {
       console.log('🔍 getBusiness called with:', identifier, typeof identifier);
 
-      // Try 1: Find by UUID (id field)
       let business = await this.Business.findOne({ id: identifier });
       if (business) {
         console.log('✅ Found business by UUID');
         return business;
       }
 
-      // Try 2: Find by numeric businessId
       const businessIdNum = parseInt(identifier, 10);
       if (!isNaN(businessIdNum)) {
         business = await this.Business.findOne({ businessId: businessIdNum });
@@ -345,7 +478,6 @@ export class MongoStorage {
         }
       }
 
-      // Try 3: Find by string businessId (just in case)
       business = await this.Business.findOne({ businessId: identifier });
       if (business) {
         console.log('✅ Found business by string businessId');
@@ -360,13 +492,10 @@ export class MongoStorage {
     }
   }
 
-
-  // You already have getBusinessByBusinessId, but let's make sure it's correct
   async getBusinessByBusinessId(businessId) {
     try {
       console.log('🔍 getBusinessByBusinessId called with:', businessId, typeof businessId);
 
-      // Make sure it's a number
       const numericId = Number(businessId);
       if (isNaN(numericId)) {
         console.log('❌ Not a valid number:', businessId);
@@ -412,58 +541,11 @@ export class MongoStorage {
     return result.deletedCount > 0;
   }
 
-  // === UTILITY METHODS ===
-
-  async getBusinessByBusinessId(businessId) {
-    console.log('🔍 getBusinessByBusinessId called with:', businessId, typeof businessId);
-
-    // Make sure it's a number
-    const numericId = Number(businessId);
-    if (isNaN(numericId)) {
-      console.log('❌ Not a valid number:', businessId);
-      return undefined;
-    }
-
-    try {
-      const business = await this.Business.findOne({ businessId: numericId });
-      console.log('✅ Business found:', !!business);
-      if (business) {
-        console.log('Business details:', {
-          id: business.id,
-          businessId: business.businessId,
-          businessName: business.businessName
-        });
-      }
-      return business ?? undefined;
-    } catch (error) {
-      console.error('❌ Error in getBusinessByBusinessId:', error);
-      return undefined;
-    }
-  }
-
   async getBusinessUsers(businessId) {
     return await this.User.find({ associatedBusinessId: businessId.toString() });
   }
 
-  async updateUserLastLogin(userId) {
-    try {
-      const result = await this.User.findOneAndUpdate(
-        { id: userId },
-        {
-          lastLogin: new Date().toISOString(),
-          updatedAt: new Date()
-        },
-        { new: true }
-      );
-      return result ?? undefined;
-    } catch (error) {
-      console.error('Error updating user last login:', error);
-      throw error;
-    }
-  }
-  // Add this method to your MongoStorage class
   async getBusinessByIdentifier(identifier) {
-    // Try by numeric businessId first
     const businessIdNum = parseInt(identifier, 10);
     if (!isNaN(businessIdNum)) {
       const businessByNumericId = await this.Business.findOne({ businessId: businessIdNum });
@@ -477,19 +559,5 @@ export class MongoStorage {
     if (businessByName) return businessByName;
 
     return undefined;
-  }
-
-  async migrateDefaultBusiness() {
-    try {
-      const defaultBusiness = await this.Business.findOne({ businessName: "BizTrack Application" });
-      if (defaultBusiness && defaultBusiness.businessId === "BIZ-TRACK-DEFAULT") {
-        console.log("🔄 Migrating default business ID from string to number...");
-        defaultBusiness.businessId = 0;
-        await defaultBusiness.save();
-        console.log("✅ Default business migration completed");
-      }
-    } catch (error) {
-      console.error("❌ Error migrating default business:", error);
-    }
   }
 }
