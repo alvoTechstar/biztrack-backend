@@ -52,7 +52,7 @@ const businessSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
-// ENHANCED OTP Schema
+// OTP Schema
 const otpSchema = new mongoose.Schema({
   id: { 
     type: String, 
@@ -65,11 +65,11 @@ const otpSchema = new mongoose.Schema({
     required: true, 
     index: true 
   },
-  originalOtp: {  // Store original OTP
+  originalOtp: {
     type: String, 
     required: true 
   },
-  maskedOtp: {  // Store masked version
+  maskedOtp: {
     type: String,
     default: null
   },
@@ -88,22 +88,22 @@ const otpSchema = new mongoose.Schema({
     required: true,
     index: true 
   },
-  status: {  // Changed from 'used' to 'status'
+  status: {
     type: String,
     enum: ["pending", "consumed", "expired", "revoked"],
     default: "pending"
   },
-  consumedAt: {  // Changed from 'usedAt'
+  consumedAt: {
     type: Date 
   },
   attempts: { 
     type: Number, 
     default: 0 
   },
-  ipAddress: {  // Track IP for security
+  ipAddress: {
     type: String
   },
-  userAgent: {  // Track device info
+  userAgent: {
     type: String
   },
   createdAt: { 
@@ -141,18 +141,14 @@ export class MongoStorage {
   async initialize() {
     await this.createDefaultSetup();
     await this.cleanupExpiredOTPs();
-    console.log("✅ MongoStorage initialized with enhanced OTP handling");
   }
 
   async createDefaultSetup() {
     try {
-      console.log("🔧 Checking for default business and admin...");
-
       const existingBusiness = await this.Business.findOne({ businessName: "BizTrack Application" });
       let business;
 
       if (existingBusiness) {
-        console.log('✅ Default business already exists');
         business = existingBusiness;
       } else {
         const defaultBusiness = new this.Business({
@@ -174,7 +170,6 @@ export class MongoStorage {
 
         await defaultBusiness.save();
         business = defaultBusiness;
-        console.log('✅ Default business created successfully!');
       }
 
       const existingAdmin = await this.User.findOne({ email: "admin@biztrack.com" });
@@ -201,47 +196,29 @@ export class MongoStorage {
         });
 
         await defaultAdmin.save();
-        console.log('✅ Default super admin user created successfully!');
       }
 
-      console.log('\n📋 DEFAULT LOGIN CREDENTIALS:');
-      console.log('─────────────────────────────');
-      console.log('Email:    admin@biztrack.com');
-      console.log('Password: Admin123!');
-      console.log('Role:     Super_Admin');
-      console.log('Business: BizTrack Application');
-      console.log('─────────────────────────────\n');
-
     } catch (error) {
-      console.error('❌ Error creating default setup:', error);
+      throw new Error(`Error creating default setup: ${error.message}`);
     }
   }
 
-  // ==================== ENHANCED OTP METHODS ====================
+  // ==================== OTP METHODS ====================
 
-  // Helper method to mask OTP (shows only first and last digit)
   maskOTP(otp) {
     if (!otp || otp.length !== 6) return "******";
     return `${otp.charAt(0)}****${otp.charAt(5)}`;
   }
 
-  // Helper method to fully mask consumed OTP
   fullyMaskOTP(otp) {
     return "••••••";
   }
 
   async createOTP(email, otp, type, userId = null, metadata = {}) {
     try {
-      console.log(`\n📝 === CREATING OTP ===`);
-      console.log(`   Email: ${email}`);
-      console.log(`   OTP: ${otp}`);
-      console.log(`   Type: ${type}`);
-      console.log(`   User ID: ${userId}`);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
       
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-      
-      // Revoke all previous pending OTPs for this email and type
-      const revokeResult = await this.OTP.updateMany(
+      await this.OTP.updateMany(
         { 
           email, 
           type, 
@@ -253,17 +230,12 @@ export class MongoStorage {
           $set: { reason: "superseded_by_new_otp" }
         }
       );
-      
-      if (revokeResult.modifiedCount > 0) {
-        console.log(`   Revoked ${revokeResult.modifiedCount} previous pending OTPs`);
-      }
 
-      // Create new OTP with original value and masked version
       const newOTP = new this.OTP({
         id: randomUUID(),
         email,
         originalOtp: otp,
-        maskedOtp: this.maskOTP(otp), // Store masked version
+        maskedOtp: this.maskOTP(otp),
         type,
         userId,
         expiresAt,
@@ -274,34 +246,23 @@ export class MongoStorage {
 
       const savedOTP = await newOTP.save();
       
-      console.log(`✅ OTP CREATED SUCCESSFULLY`);
-      console.log(`   OTP ID: ${savedOTP.id}`);
-      console.log(`   Status: ${savedOTP.status}`);
-      console.log(`   Masked: ${savedOTP.maskedOtp}`);
-      console.log(`   Expires: ${savedOTP.expiresAt.toISOString()}`);
-      
       return {
         id: savedOTP.id,
-        otp: savedOTP.originalOtp, // Return original for sending
+        otp: savedOTP.originalOtp,
         maskedOtp: savedOTP.maskedOtp
       };
       
     } catch (error) {
-      console.error(`❌ ERROR CREATING OTP: ${error.message}`);
-      throw error;
+      throw new Error(`Error creating OTP: ${error.message}`);
     }
   }
 
   async getValidOTP(email, otp, type = null, metadata = {}) {
     try {
-      console.log(`\n🔍 === FINDING VALID OTP ===`);
-      console.log(`   Email: ${email}`);
-      console.log(`   OTP provided: ${otp}`);
-      
       const now = new Date();
       const query = {
         email: email.trim().toLowerCase(),
-        originalOtp: otp, // Match against original OTP
+        originalOtp: otp,
         expiresAt: { $gt: now },
         status: "pending"
       };
@@ -309,21 +270,12 @@ export class MongoStorage {
       if (type) {
         query.type = type;
       }
-
-      console.log(`   Query:`, JSON.stringify(query));
       
       const foundOTP = await this.OTP.findOne(query).sort({ createdAt: -1 });
       
       if (foundOTP) {
-        console.log(`✅ VALID PENDING OTP FOUND`);
-        console.log(`   OTP ID: ${foundOTP.id}`);
-        console.log(`   Status: ${foundOTP.status}`);
-        console.log(`   Expires: ${foundOTP.expiresAt.toISOString()}`);
-        
-        // Increment attempts counter
         foundOTP.attempts += 1;
         
-        // Update metadata if provided
         if (metadata.ipAddress) {
           foundOTP.ipAddress = metadata.ipAddress;
         }
@@ -332,47 +284,17 @@ export class MongoStorage {
         }
         
         await foundOTP.save();
-        console.log(`   Updated attempts to: ${foundOTP.attempts}`);
-        
         return foundOTP;
-      } else {
-        console.log(`❌ NO VALID PENDING OTP FOUND`);
-        
-        // Check what OTPs exist for debugging
-        const debugQuery = {
-          email: email.trim().toLowerCase(),
-          originalOtp: otp
-        };
-        
-        const allMatchingOTPs = await this.OTP.find(debugQuery).sort({ createdAt: -1 });
-        
-        if (allMatchingOTPs.length === 0) {
-          console.log(`   No OTPs found with this email and code`);
-        } else {
-          console.log(`   Found ${allMatchingOTPs.length} matching OTPs with different statuses:`);
-          allMatchingOTPs.forEach((otpDoc, index) => {
-            const isExpired = otpDoc.expiresAt < now;
-            console.log(`   ${index + 1}. Status: ${otpDoc.status}, ` +
-                      `Expired: ${isExpired}, ` +
-                      `Created: ${otpDoc.createdAt.toISOString()}, ` +
-                      `Expires: ${otpDoc.expiresAt.toISOString()}`);
-          });
-        }
-        
-        return null;
       }
-    } catch (error) {
-      console.error(`❌ ERROR FINDING OTP: ${error.message}`);
+      
       return null;
+    } catch (error) {
+      throw new Error(`Error finding OTP: ${error.message}`);
     }
   }
 
   async consumeOTP(email, otp = null, metadata = {}) {
     try {
-      console.log(`\n🔄 === CONSUMING OTP ===`);
-      console.log(`   Email: ${email}`);
-      console.log(`   OTP: ${otp || 'all pending for this email'}`);
-      
       const query = { 
         email: email.trim().toLowerCase(), 
         status: "pending"
@@ -382,12 +304,10 @@ export class MongoStorage {
         query.originalOtp = otp;
       }
 
-      console.log(`   Query:`, JSON.stringify(query));
-      
       const updateData = {
         status: "consumed",
         consumedAt: new Date(),
-        maskedOtp: this.fullyMaskOTP(otp), // Fully mask the OTP
+        maskedOtp: this.fullyMaskOTP(otp),
         updatedAt: new Date(),
         $set: {
           ...metadata,
@@ -396,29 +316,13 @@ export class MongoStorage {
       };
 
       const result = await this.OTP.updateMany(query, updateData);
-      
-      console.log(`✅ CONSUMED ${result.modifiedCount} OTP(S)`);
-      
-      // Verify the update
-      if (otp) {
-        const updatedOTP = await this.OTP.findOne({ email, originalOtp: otp });
-        if (updatedOTP) {
-          console.log(`   Verification - OTP ${this.maskOTP(otp)}:`);
-          console.log(`     Status: ${updatedOTP.status}`);
-          console.log(`     Consumed At: ${updatedOTP.consumedAt?.toISOString()}`);
-          console.log(`     Masked Display: ${updatedOTP.maskedOtp}`);
-        }
-      }
-      
       return result.modifiedCount > 0;
       
     } catch (error) {
-      console.error(`❌ ERROR CONSUMING OTP: ${error.message}`);
-      return false;
+      throw new Error(`Error consuming OTP: ${error.message}`);
     }
   }
 
-  // Backward compatibility - keep old method but use new one internally
   async markOTPAsUsed(email, otp = null) {
     return this.consumeOTP(email, otp, { 
       compatibilityMode: "markOTPAsUsed" 
@@ -434,11 +338,9 @@ export class MongoStorage {
         status: "pending"
       });
       
-      console.log(`📊 Recent OTP attempts for ${email}: ${count} in last ${minutes} minutes`);
       return count;
     } catch (error) {
-      console.error('Error getting OTP attempts:', error);
-      return 0;
+      throw new Error(`Error getting OTP attempts: ${error.message}`);
     }
   }
 
@@ -462,7 +364,6 @@ export class MongoStorage {
       const now = new Date();
       const isExpired = otpDoc.expiresAt < now;
       
-      // Determine actual status
       let actualStatus = otpDoc.status;
       if (actualStatus === "pending" && isExpired) {
         actualStatus = "expired";
@@ -487,12 +388,7 @@ export class MongoStorage {
       };
       
     } catch (error) {
-      console.error(`❌ ERROR GETTING OTP STATUS: ${error.message}`);
-      return {
-        exists: false,
-        status: "error",
-        message: error.message
-      };
+      throw new Error(`Error getting OTP status: ${error.message}`);
     }
   }
 
@@ -500,111 +396,25 @@ export class MongoStorage {
     try {
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       
-      // Delete OTPs older than 30 days (regardless of status)
       const deleteResult = await this.OTP.deleteMany({
         createdAt: { $lt: thirtyDaysAgo }
       });
       
-      if (deleteResult.deletedCount > 0) {
-        console.log(`🧹 CLEANED UP ${deleteResult.deletedCount} OLD OTP(S)`);
-      }
-      
       return deleteResult.deletedCount;
       
     } catch (error) {
-      console.error('Error cleaning up OTPs:', error);
-      return 0;
-    }
-  }
-
-  // ==================== DEBUG METHODS ====================
-
-  async debugOTPs(email = null) {
-    try {
-      console.log("\n" + "=".repeat(80));
-      console.log("🔍 OTP DATABASE DEBUG - ENHANCED SYSTEM");
-      console.log("=".repeat(80));
-      
-      const query = email ? { email: email.trim().toLowerCase() } : {};
-      const allOTPs = await this.OTP.find(query).sort({ createdAt: -1 }).limit(20);
-      const totalCount = await this.OTP.countDocuments(query);
-      
-      console.log(`\n📊 STATISTICS:`);
-      console.log(`   Total OTPs in database: ${totalCount}`);
-      console.log(`   Showing last: ${allOTPs.length}`);
-      
-      if (allOTPs.length > 0) {
-        console.log("\n📋 OTP DETAILS:");
-        console.log("-".repeat(120));
-        console.log(
-          "Status".padEnd(10) + " | " +
-          "Email".padEnd(25) + " | " +
-          "OTP Display".padEnd(12) + " | " +
-          "Type".padEnd(10) + " | " +
-          "Attempts".padEnd(8) + " | " +
-          "Created".padEnd(20) + " | " +
-          "Expires".padEnd(20) + " | " +
-          "Consumed"
-        );
-        console.log("-".repeat(120));
-        
-        allOTPs.forEach(otp => {
-          const now = new Date();
-          const isExpired = otp.expiresAt < now;
-          const statusIcon = {
-            "pending": isExpired ? "⏰" : "⏳",
-            "consumed": "✅",
-            "revoked": "🚫",
-            "expired": "⏰"
-          }[otp.status] || "❓";
-          
-          const displayOtp = otp.maskedOtp || this.maskOTP(otp.originalOtp);
-          
-          console.log(
-            (statusIcon + " " + otp.status).padEnd(10) + " | " +
-            otp.email.substring(0, 24).padEnd(25) + " | " +
-            displayOtp.padEnd(12) + " | " +
-            otp.type.padEnd(10) + " | " +
-            otp.attempts.toString().padEnd(8) + " | " +
-            otp.createdAt.toLocaleString().padEnd(20) + " | " +
-            otp.expiresAt.toLocaleString().padEnd(20) + " | " +
-            (otp.consumedAt ? otp.consumedAt.toLocaleString() : "N/A")
-          );
-        });
-        
-        console.log("-".repeat(120));
-        
-        // Count by status
-        const statusCounts = await this.OTP.aggregate([
-          { $match: query },
-          { $group: { _id: "$status", count: { $sum: 1 } } }
-        ]);
-        
-        console.log(`\n📈 STATUS BREAKDOWN:`);
-        statusCounts.forEach(stat => {
-          console.log(`   ${stat._id}: ${stat.count}`);
-        });
-      } else {
-        console.log("\n📭 No OTPs found in database");
-      }
-      
-      console.log("\n" + "=".repeat(80));
-      
-    } catch (error) {
-      console.error('Error debugging OTPs:', error);
+      throw new Error(`Error cleaning up OTPs: ${error.message}`);
     }
   }
 
   // ==================== USER METHODS ====================
-  // KEEP ALL YOUR EXISTING USER METHODS EXACTLY AS THEY ARE
-  
+
   async getUserByEmail(email) {
     try {
       const user = await this.User.findOne({ email: email.trim().toLowerCase() });
       return user ? user.toObject() : undefined;
     } catch (error) {
-      console.error('Error finding user by email:', error);
-      throw error;
+      throw new Error(`Error finding user by email: ${error.message}`);
     }
   }
 
@@ -616,8 +426,7 @@ export class MongoStorage {
       }
       return user ? user.toObject() : undefined;
     } catch (error) {
-      console.error('Error getting user:', error);
-      return undefined;
+      throw new Error(`Error getting user: ${error.message}`);
     }
   }
 
@@ -626,8 +435,7 @@ export class MongoStorage {
       const user = await this.User.findOne({ username });
       return user ? user.toObject() : undefined;
     } catch (error) {
-      console.error('Error finding user by username:', error);
-      throw error;
+      throw new Error(`Error finding user by username: ${error.message}`);
     }
   }
 
@@ -645,8 +453,7 @@ export class MongoStorage {
       await newUser.save();
       return newUser.toObject();
     } catch (error) {
-      console.error('Error creating user:', error);
-      throw error;
+      throw new Error(`Error creating user: ${error.message}`);
     }
   }
 
@@ -658,7 +465,6 @@ export class MongoStorage {
       }
 
       if (!user) {
-        console.log("❌ User not found with ID:", userId);
         return undefined;
       }
 
@@ -666,12 +472,9 @@ export class MongoStorage {
       user.updatedAt = new Date();
 
       const result = await user.save();
-      console.log("✅ Password updated successfully for:", user.email);
-
       return result.toObject();
     } catch (error) {
-      console.error('❌ Error updating user password:', error);
-      throw error;
+      throw new Error(`Error updating user password: ${error.message}`);
     }
   }
 
@@ -687,8 +490,7 @@ export class MongoStorage {
       );
       return result ? result.toObject() : undefined;
     } catch (error) {
-      console.error('Error updating user:', error);
-      throw error;
+      throw new Error(`Error updating user: ${error.message}`);
     }
   }
 
@@ -697,8 +499,7 @@ export class MongoStorage {
       const result = await this.User.deleteOne({ id });
       return result.deletedCount > 0;
     } catch (error) {
-      console.error('Error deleting user:', error);
-      throw error;
+      throw new Error(`Error deleting user: ${error.message}`);
     }
   }
 
@@ -707,8 +508,7 @@ export class MongoStorage {
       const users = await this.User.find();
       return users.map(user => user.toObject());
     } catch (error) {
-      console.error('Error getting all users:', error);
-      throw error;
+      throw new Error(`Error getting all users: ${error.message}`);
     }
   }
 
@@ -724,8 +524,7 @@ export class MongoStorage {
       );
       return result ? result.toObject() : undefined;
     } catch (error) {
-      console.error('Error updating user last login:', error);
-      throw error;
+      throw new Error(`Error updating user last login: ${error.message}`);
     }
   }
 
@@ -751,11 +550,9 @@ export class MongoStorage {
         return business.toObject();
       }
 
-      console.log('❌ Business not found with identifier:', identifier);
       return undefined;
     } catch (error) {
-      console.error('❌ Error in getBusiness:', error);
-      return undefined;
+      throw new Error(`Error getting business: ${error.message}`);
     }
   }
 
@@ -773,62 +570,88 @@ export class MongoStorage {
 
       return highestBusiness.businessId + 1;
     } catch (error) {
-      console.error('Error generating business ID:', error);
-      const count = await this.Business.countDocuments({ businessId: { $ne: 0 } });
-      return count + 1;
+      throw new Error(`Error generating business ID: ${error.message}`);
     }
   }
 
   async createBusiness(businessData) {
-    const businessId = await this.generateBusinessId();
+    try {
+      const businessId = await this.generateBusinessId();
 
-    const newBusiness = new this.Business({
-      ...businessData,
-      id: randomUUID(),
-      businessId,
-    });
+      const newBusiness = new this.Business({
+        ...businessData,
+        id: randomUUID(),
+        businessId,
+      });
 
-    await newBusiness.save();
-    return newBusiness.toObject();
+      await newBusiness.save();
+      return newBusiness.toObject();
+    } catch (error) {
+      throw new Error(`Error creating business: ${error.message}`);
+    }
   }
 
   async getBusinessByRegistrationNumber(regNumber) {
-    const business = await this.Business.findOne({ registrationNumber: regNumber });
-    return business ? business.toObject() : undefined;
+    try {
+      const business = await this.Business.findOne({ registrationNumber: regNumber });
+      return business ? business.toObject() : undefined;
+    } catch (error) {
+      throw new Error(`Error getting business by registration number: ${error.message}`);
+    }
   }
 
   async getBusinessByName(name) {
-    const business = await this.Business.findOne({ businessName: name });
-    return business ? business.toObject() : undefined;
+    try {
+      const business = await this.Business.findOne({ businessName: name });
+      return business ? business.toObject() : undefined;
+    } catch (error) {
+      throw new Error(`Error getting business by name: ${error.message}`);
+    }
   }
 
   async getBusinesses() {
-    const businesses = await this.Business.find().sort({ businessId: 1 });
-    return businesses.map(business => business.toObject());
+    try {
+      const businesses = await this.Business.find().sort({ businessId: 1 });
+      return businesses.map(business => business.toObject());
+    } catch (error) {
+      throw new Error(`Error getting businesses: ${error.message}`);
+    }
   }
 
   async updateBusiness(id, updateData) {
-    const dataToUpdate = { ...updateData };
-    delete dataToUpdate.registrationNumber;
-    delete dataToUpdate.owner;
-    delete dataToUpdate.logoFile;
+    try {
+      const dataToUpdate = { ...updateData };
+      delete dataToUpdate.registrationNumber;
+      delete dataToUpdate.owner;
+      delete dataToUpdate.logoFile;
 
-    const result = await this.Business.findOneAndUpdate(
-      { id },
-      { ...dataToUpdate, updatedAt: new Date() },
-      { new: true }
-    );
-    return result ? result.toObject() : undefined;
+      const result = await this.Business.findOneAndUpdate(
+        { id },
+        { ...dataToUpdate, updatedAt: new Date() },
+        { new: true }
+      );
+      return result ? result.toObject() : undefined;
+    } catch (error) {
+      throw new Error(`Error updating business: ${error.message}`);
+    }
   }
 
   async deleteBusiness(id) {
-    const result = await this.Business.deleteOne({ id });
-    return result.deletedCount > 0;
+    try {
+      const result = await this.Business.deleteOne({ id });
+      return result.deletedCount > 0;
+    } catch (error) {
+      throw new Error(`Error deleting business: ${error.message}`);
+    }
   }
 
   async getBusinessUsers(businessId) {
-    const users = await this.User.find({ associatedBusinessId: businessId.toString() });
-    return users.map(user => user.toObject());
+    try {
+      const users = await this.User.find({ associatedBusinessId: businessId.toString() });
+      return users.map(user => user.toObject());
+    } catch (error) {
+      throw new Error(`Error getting business users: ${error.message}`);
+    }
   }
 
   async getBusinessByBusinessId(businessId) {
@@ -841,60 +664,27 @@ export class MongoStorage {
       const business = await this.Business.findOne({ businessId: numericId });
       return business ? business.toObject() : undefined;
     } catch (error) {
-      console.error('❌ Error in getBusinessByBusinessId:', error);
-      return undefined;
+      throw new Error(`Error getting business by business ID: ${error.message}`);
     }
   }
 
   async getBusinessByIdentifier(identifier) {
-    const businessIdNum = parseInt(identifier, 10);
-    if (!isNaN(businessIdNum)) {
-      const businessByNumericId = await this.Business.findOne({ businessId: businessIdNum });
-      if (businessByNumericId) return businessByNumericId.toObject();
-    }
-    const businessByUUID = await this.Business.findOne({ id: identifier });
-    if (businessByUUID) return businessByUUID.toObject();
-    const businessByReg = await this.Business.findOne({ registrationNumber: identifier });
-    if (businessByReg) return businessByReg.toObject();
-    const businessByName = await this.Business.findOne({ businessName: identifier });
-    if (businessByName) return businessByName.toObject();
-
-    return undefined;
-  }
-
-  // ==================== DEBUG METHODS ====================
-
-  async debugOTPs(email = null) {
     try {
-      const query = email ? { email: email.trim().toLowerCase() } : {};
-      const allOTPs = await this.OTP.find(query).sort({ createdAt: -1 }).limit(50);
-      const totalCount = await this.OTP.countDocuments(query);
-      
-      console.log(`\n📊 OTP Statistics:`);
-      console.log(`   Total OTPs: ${totalCount}`);
-      console.log(`   Showing: ${allOTPs.length} most recent`);
-      
-      if (allOTPs.length > 0) {
-        console.log("\n📋 OTP DETAILS:");
-        allOTPs.forEach(otp => {
-          const now = new Date();
-          const isExpired = otp.expiresAt < now;
-          const status = otp.used ? 'USED' : (isExpired ? 'EXPIRED' : 'ACTIVE');
-          const statusColor = otp.used ? '✓' : (isExpired ? '✗' : '●');
-          
-          console.log(
-            `   ${otp.id.substring(0, 8)}... | ` +
-            `${otp.email} | ` +
-            `${otp.otp} | ` +
-            `${otp.type} | ` +
-            `${statusColor} | ` +
-            `${otp.createdAt.toISOString()}`
-          );
-        });
+      const businessIdNum = parseInt(identifier, 10);
+      if (!isNaN(businessIdNum)) {
+        const businessByNumericId = await this.Business.findOne({ businessId: businessIdNum });
+        if (businessByNumericId) return businessByNumericId.toObject();
       }
-      
+      const businessByUUID = await this.Business.findOne({ id: identifier });
+      if (businessByUUID) return businessByUUID.toObject();
+      const businessByReg = await this.Business.findOne({ registrationNumber: identifier });
+      if (businessByReg) return businessByReg.toObject();
+      const businessByName = await this.Business.findOne({ businessName: identifier });
+      if (businessByName) return businessByName.toObject();
+
+      return undefined;
     } catch (error) {
-      console.error('Error debugging OTPs:', error);
+      throw new Error(`Error getting business by identifier: ${error.message}`);
     }
   }
 }
