@@ -58,7 +58,18 @@ const transactionSchema = new mongoose.Schema({
         quantity: {
             type: Number,
             required: true,
-            min: 1
+            min: [0.01, 'Quantity must be at least 0.01'], // CHANGED: Was min: 1, now allows fractional quantities
+            validate: {
+                validator: function(value) {
+                    return value > 0;
+                },
+                message: 'Quantity must be greater than 0'
+            }
+        },
+        unit: {  // NEW FIELD: Track measurement unit (kg, pieces, liters, etc.)
+            type: String,
+            default: 'units',
+            trim: true
         },
         unitPrice: {
             type: Number,

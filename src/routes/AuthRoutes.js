@@ -11,75 +11,45 @@ export default function AuthRoutes(storage) {
         return Math.floor(100000 + Math.random() * 900000).toString();
     };
 
-    // Email configuration with Render-friendly settings
+    // Email configuration
     const createTransporter = () => {
         if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-            console.warn("⚠️ Email credentials not configured. OTPs will be logged to console only.");
             return null;
         }
 
         try {
-            console.log("🔧 Creating email transporter for Render...");
-
-            // Render-specific settings - keeps your existing config but optimized
             const transporter = nodemailer.createTransport({
                 service: 'gmail',
                 auth: {
                     user: process.env.EMAIL_USER,
                     pass: process.env.EMAIL_PASS
                 },
-                // IMPORTANT: Render-compatible settings
                 host: 'smtp.gmail.com',
-                port: 587, // Use port 587 (STARTTLS) instead of 465
-                secure: false, // false for STARTTLS
-                requireTLS: true, // Require TLS
-                // Render timeout settings
-                connectionTimeout: 30000, // Increased for Render
+                port: 587,
+                secure: false,
+                requireTLS: true,
+                connectionTimeout: 30000,
                 socketTimeout: 30000,
                 greetingTimeout: 30000,
-                // TLS settings for Render
                 tls: {
-                    rejectUnauthorized: false // Bypass SSL cert validation on Render
+                    rejectUnauthorized: false
                 },
-                // Keep your existing settings
                 pool: true,
-                maxConnections: 3, // Reduced for Render free tier
+                maxConnections: 3,
                 maxMessages: 50,
-                rateLimit: 5 // Reduced rate limiting
+                rateLimit: 5
             });
-
-            // MODIFIED: Don't verify immediately - it's failing on Render
-            // Instead, verify on first use or log without verification
-            console.log('✅ Email transporter created (delayed verification)');
-
-            // Optional: Verify in background but don't block
-            setTimeout(() => {
-                transporter.verify((error) => {
-                    if (error) {
-                        console.warn('⚠️ Email verification failed (emails may still work):', error.message);
-                        console.log('📧 OTPs will be logged to console. Check Render logs for OTPs.');
-                    } else {
-                        console.log('✅ Email connection verified successfully');
-                    }
-                });
-            }, 2000); // Delay verification by 2 seconds
 
             return transporter;
         } catch (error) {
-            console.error('❌ Failed to create email transporter:', error.message);
-            console.log('📧 OTPs will be logged to console for manual entry');
             return null;
         }
     };
+
     const transporter = createTransporter();
 
     const sendOTPEmail = async (email, otp, type = 'login') => {
-        // Always log OTP for debugging
-        console.log(`📧 OTP for ${email}: ${otp} (type: ${type})`);
-
-        // If email is not configured, log and return success for development
         if (!transporter || !process.env.EMAIL_USER) {
-            console.log(`📧 [DEV MODE] Would send OTP ${otp} to ${email} for ${type}`);
             return { success: true, devMode: true };
         }
 
@@ -107,7 +77,6 @@ export default function AuthRoutes(storage) {
                     </p>
                 </div>
                 `,
-                // Add headers for better deliverability
                 headers: {
                     'X-Priority': '1',
                     'X-MSMail-Priority': 'High',
@@ -115,7 +84,6 @@ export default function AuthRoutes(storage) {
                 }
             };
 
-            // Add timeout to sendMail
             const sendPromise = transporter.sendMail(mailOptions);
             const timeoutPromise = new Promise((_, reject) => {
                 setTimeout(() => reject(new Error('Email sending timeout')), 10000);
@@ -123,14 +91,9 @@ export default function AuthRoutes(storage) {
 
             await Promise.race([sendPromise, timeoutPromise]);
 
-            console.log(`✅ OTP email sent successfully to ${email}`);
             return { success: true };
 
         } catch (error) {
-            console.error("❌ Failed to send OTP email:", error.message);
-            console.log(`📧 [FALLBACK] OTP for ${email}: ${otp}`);
-
-            // Don't throw error - allow login to continue in development
             return {
                 success: false,
                 error: error.message,
@@ -139,12 +102,10 @@ export default function AuthRoutes(storage) {
         }
     };
 
-    // POST /api/auth/login - Initiate login with email/password
+    // ==================== LOGIN ENDPOINT ====================
     router.post("/login", async (req, res) => {
         try {
             const { email, password } = req.body;
-
-            console.log("🔐 Login attempt:", { email, passwordLength: password?.length });
 
             if (!email || !password) {
                 return res.status(400).json({
@@ -153,74 +114,69 @@ export default function AuthRoutes(storage) {
                 });
             }
 
-            const user = await storage.getUserByEmail(email);
+            const user = await storage.getUserByEmail(email.trim().toLowerCase());
             if (!user) {
-                console.log(`❌ Login failed: User not found for ${email}`);
                 return res.status(401).json({
                     success: false,
                     message: "Invalid email or password"
                 });
             }
 
-            // Check user status
-            const userStatus = (user.status || '').toLowerCase();
-            if (userStatus !== 'active') {
-                console.log(`❌ Login blocked: User account is ${user.status || 'inactive'}`);
+            if (user.status !== 'ACTIVE') {
                 return res.status(403).json({
                     success: false,
-                    message: "Your account has been disabled. Please contact your administrator."
-                });
-            }
-
-            console.log(`✅ User status check passed: ${email} is ACTIVE`);
-
-            if (!user.password) {
-                console.log(`❌ Login failed: No password set for ${email}`);
-                return res.status(401).json({
-                    success: false,
-                    message: "Invalid email or password"
+                    message: "Your account is not active. Please contact administrator."
                 });
             }
 
             const isPasswordValid = await bcrypt.compare(password, user.password);
-            console.log(`🔐 Password comparison result: ${isPasswordValid}`);
-
             if (!isPasswordValid) {
-                console.log(`❌ Login failed: Invalid password for ${email}`);
                 return res.status(401).json({
                     success: false,
                     message: "Invalid email or password"
                 });
             }
 
-            console.log(`✅ Password valid for user: ${email}`);
-
-            // Generate and store OTP in database
             const otp = generateOTP();
-            await storage.createOTP(email, otp, 'login', user.id);
 
-            // Send OTP email
+            const otpResult = await storage.createOTP(
+                email,
+                otp,
+                'login',
+                user.id,
+                {
+                    ipAddress: req.ip,
+                    userAgent: req.headers['user-agent']
+                }
+            );
+
             const emailResult = await sendOTPEmail(email, otp, 'login');
 
-            res.json({
+            const response = {
                 success: true,
                 message: emailResult.devMode
-                    ? `OTP generated: ${otp} (Email service not configured)`
+                    ? `OTP: ${otp} (Email service not configured)`
                     : "OTP sent to your email",
                 requiresOTP: true,
-                devMode: emailResult.devMode || false
-            });
+                devMode: emailResult.devMode || false,
+                otpMasked: otpResult.maskedOtp
+            };
+
+            if (emailResult.devMode) {
+                response.otp = otp;
+            }
+
+            res.json(response);
 
         } catch (error) {
-            console.error("❌ Login error:", error);
             res.status(500).json({
                 success: false,
-                message: "Internal server error"
+                message: "Internal server error during login"
             });
         }
     });
 
-    // POST /api/auth/resend-otp - Resend OTP for login
+    // ==================== VERIFY OTP ENDPOINT ====================
     router.post("/verify-otp", async (req, res) => {
         try {
             const { email, otp } = req.body;
@@ -232,142 +188,86 @@ export default function AuthRoutes(storage) {
                 });
             }
 
-            const storedOTP = await storage.getValidOTP(email, otp, 'login');
+            const otpStatus = await storage.getOTPStatus(email, otp);
+
+            if (!otpStatus.exists) {
+                return res.status(400).json({
+                    success: false,
+                    message: "No OTP found for this email"
+                });
+            }
+
+            if (otpStatus.status === "consumed") {
+                return res.status(400).json({
+                    success: false,
+                    message: "This OTP has already been used",
+                    code: "OTP_ALREADY_CONSUMED"
+                });
+            }
+
+            if (otpStatus.status === "expired") {
+                return res.status(400).json({
+                    success: false,
+                    message: "OTP has expired. Please request a new one",
+                    code: "OTP_EXPIRED"
+                });
+            }
+
+            if (otpStatus.status === "revoked") {
+                return res.status(400).json({
+                    success: false,
+                    message: "This OTP has been revoked. Please request a new one",
+                    code: "OTP_REVOKED"
+                });
+            }
+
+            if (!otpStatus.canBeUsed) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid OTP status",
+                    code: "INVALID_OTP_STATUS"
+                });
+            }
+
+            const storedOTP = await storage.getValidOTP(
+                email,
+                otp,
+                'login',
+                {
+                    ipAddress: req.ip,
+                    userAgent: req.headers['user-agent']
+                }
+            );
+            
             if (!storedOTP) {
                 return res.status(400).json({
                     success: false,
-                    message: "Invalid or expired OTP. Please request a new one."
+                    message: "Invalid or expired OTP. Please request a new one",
+                    code: "INVALID_OTP"
                 });
             }
 
-            // Mark OTP as used AFTER sending response to avoid async issues
-            await storage.markOTPAsUsed(email, otp);
+            await storage.consumeOTP(
+                email,
+                otp,
+                {
+                    ipAddress: req.ip,
+                    userAgent: req.headers['user-agent'],
+                    consumptionSource: "login_verification"
+                }
+            );
 
             const user = await storage.getUserByEmail(email);
-            if (!user) {
-                return res.status(404).json({
-                    success: false,
-                    message: "User not found"
-                });
-            }
-
-            if ((user.status || '').toLowerCase() !== 'active') {
-                return res.status(403).json({
-                    success: false,
-                    message: "Your account has been disabled."
-                });
-            }
-
-            const business = await storage.getBusiness(user.associatedBusinessId || user.institutionId);
+            const businessId = user.associatedBusinessId || user.institutionId;
+            const business = await storage.getBusiness(businessId);
+            
             if (!business) {
                 return res.status(404).json({
                     success: false,
-                    message: "Business not found for user"
+                    message: "Business profile not found"
                 });
             }
 
-            const cleanUser = {
-                id: user.id,
-                email: user.email,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                role: user.role,
-                status: user.status,
-                permissions: user.permissions || [],
-                lastLogin: user.lastLogin,
-                businessId: business.businessId,
-                businessUUID: business.id,
-                businessName: business.businessName,
-                businessType: business.businessType,
-                primaryColor: business.primaryColor,
-                logo: business.logoUrl
-            };
-
-            const tokenPayload = {
-                id: user.id,
-                email: user.email,
-                role: user.role,
-                status: user.status,
-                businessId: business.businessId,
-                businessUUID: business.id,
-                businessType: business.businessType,
-                primaryColor: business.primaryColor
-            };
-
-            const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '24h' });
-            await storage.updateUserLastLogin(user.id);
-
-            return res.status(200).json({
-                success: true,
-                message: "Login successful",
-                user: cleanUser,
-                token
-            });
-
-        } catch (error) {
-            console.error("❌ OTP verification error:", error);
-            return res.status(500).json({
-                success: false,
-                message: "Internal server error"
-            });
-        }
-    });
-
-    // POST /api/auth/verify-otp - Consolidated and Cleaned
-    router.post("/verify-otp", async (req, res) => {
-        try {
-            const { email, otp } = req.body;
-
-            if (!email || !otp) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Email and OTP are required"
-                });
-            }
-
-            // 1. Verify OTP exists and is valid
-            const storedOTP = await storage.getValidOTP(email, otp, 'login');
-            if (!storedOTP) {
-                console.log(`❌ OTP verification failed for ${email}`);
-                return res.status(400).json({
-                    success: false,
-                    message: "Invalid or expired OTP. Please request a new one."
-                });
-            }
-
-            // 2. Mark OTP as used immediately
-            await storage.markOTPAsUsed(email, otp);
-
-            // 3. Get User
-            const user = await storage.getUserByEmail(email);
-            if (!user) {
-                return res.status(404).json({
-                    success: false,
-                    message: "User not found"
-                });
-            }
-
-            // 4. Check Status
-            if ((user.status || '').toLowerCase() !== 'active') {
-                return res.status(403).json({
-                    success: false,
-                    message: "Your account has been disabled."
-                });
-            }
-
-            // 5. Fetch Business Data (Handling both field possibilities)
-            const businessIdToLookup = user.associatedBusinessId || user.institutionId;
-            const business = await storage.getBusiness(businessIdToLookup);
-
-            if (!business) {
-                console.log(`❌ No business found for ID: ${businessIdToLookup}`);
-                return res.status(404).json({
-                    success: false,
-                    message: "Associated business profile not found"
-                });
-            }
-
-            // 6. Prepare Response and Token
             const cleanUser = {
                 id: user.id,
                 email: user.email,
@@ -395,28 +295,111 @@ export default function AuthRoutes(storage) {
 
             const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '24h' });
 
-            // 7. Update last login in DB
             await storage.updateUserLastLogin(user.id);
 
-            console.log(`✅ Successful login for: ${email}`);
-
-            return res.status(200).json({
+            res.status(200).json({
                 success: true,
                 message: "Login successful",
                 user: cleanUser,
-                token: token
+                token: token,
+                otpStatus: "consumed"
             });
 
         } catch (error) {
-            console.error("❌ OTP verification error:", error);
-            return res.status(500).json({
+            res.status(500).json({
                 success: false,
-                message: "Internal server error during verification"
+                message: "Internal server error during OTP verification"
             });
         }
     });
 
-    // POST /api/auth/forgot-password - Initiate password reset
+    // ==================== RESEND OTP ENDPOINT ====================
+    router.post("/resend-otp", async (req, res) => {
+        try {
+            const { email } = req.body;
+
+            if (!email) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Email is required"
+                });
+            }
+
+            const user = await storage.getUserByEmail(email);
+            if (!user) {
+                return res.json({
+                    success: true,
+                    message: "If the email exists, a new OTP has been sent"
+                });
+            }
+
+            const otp = generateOTP();
+
+            const otpResult = await storage.createOTP(
+                email,
+                otp,
+                'login',
+                user.id,
+                {
+                    ipAddress: req.ip,
+                    userAgent: req.headers['user-agent'],
+                    resend: true
+                }
+            );
+
+            const emailResult = await sendOTPEmail(email, otp, 'login');
+
+            const response = {
+                success: true,
+                message: emailResult.devMode
+                    ? `New OTP: ${otp} (Email service: ${emailResult.error || 'Not configured'})`
+                    : "New OTP sent to your email",
+                devMode: emailResult.devMode || false,
+                otpMasked: otpResult.maskedOtp
+            };
+
+            if (emailResult.devMode) {
+                response.otp = otp;
+            }
+
+            res.json(response);
+
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: "Unable to resend OTP"
+            });
+        }
+    });
+
+    // ==================== CHECK OTP STATUS ENDPOINT ====================
+    router.post("/check-otp-status", async (req, res) => {
+        try {
+            const { email, otp } = req.body;
+            
+            if (!email) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Email is required"
+                });
+            }
+            
+            const otpStatus = await storage.getOTPStatus(email, otp);
+            
+            res.json({
+                success: true,
+                data: otpStatus
+            });
+            
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: "Error checking OTP status"
+            });
+        }
+    });
+
+    // ==================== FORGOT PASSWORD ENDPOINT ====================
     router.post("/forgot-password", async (req, res) => {
         try {
             const { email } = req.body;
@@ -430,17 +413,12 @@ export default function AuthRoutes(storage) {
 
             const user = await storage.getUserByEmail(email);
             if (!user) {
-                // Return success for security
-                console.log(`Password reset requested for non-existent email: ${email}`);
                 return res.json({
                     success: true,
                     message: "If the email exists, a reset OTP has been sent"
                 });
             }
 
-            console.log(`📧 Password reset requested for ${email} (Status: ${user.status})`);
-
-            // Check rate limiting
             const recentAttempts = await storage.getRecentOTPAttempts(email, 10);
             if (recentAttempts >= 3) {
                 return res.status(429).json({
@@ -449,23 +427,30 @@ export default function AuthRoutes(storage) {
                 });
             }
 
-            // Generate and store OTP
             const otp = generateOTP();
-            await storage.createOTP(email, otp, 'reset', user.id);
+            const otpResult = await storage.createOTP(
+                email,
+                otp,
+                'reset',
+                user.id,
+                {
+                    ipAddress: req.ip,
+                    userAgent: req.headers['user-agent']
+                }
+            );
 
-            // Send OTP email
             const emailResult = await sendOTPEmail(email, otp, 'reset');
 
             res.json({
                 success: true,
                 message: emailResult.devMode
-                    ? `Reset OTP generated: ${otp}`
+                    ? `Reset OTP: ${otp} (Email service not configured)`
                     : "Reset OTP sent to your email",
-                devMode: emailResult.devMode || false
+                devMode: emailResult.devMode || false,
+                otpMasked: otpResult.maskedOtp
             });
 
         } catch (error) {
-            console.error("Forgot password error:", error);
             res.status(500).json({
                 success: false,
                 message: "Unable to process password reset"
@@ -473,7 +458,7 @@ export default function AuthRoutes(storage) {
         }
     });
 
-    // POST /api/auth/verify-reset-otp - Verify OTP for password reset
+    // ==================== VERIFY RESET OTP ENDPOINT ====================
     router.post("/verify-reset-otp", async (req, res) => {
         try {
             const { email, otp } = req.body;
@@ -485,20 +470,49 @@ export default function AuthRoutes(storage) {
                 });
             }
 
-            // Get valid OTP from database
-            const storedOTP = await storage.getValidOTP(email, otp, 'reset');
+            const otpStatus = await storage.getOTPStatus(email, otp);
+            
+            if (!otpStatus.exists) {
+                return res.status(400).json({
+                    success: false,
+                    message: "No OTP found for this email"
+                });
+            }
+
+            if (otpStatus.status === "consumed") {
+                return res.status(400).json({
+                    success: false,
+                    message: "This OTP has already been used",
+                    code: "OTP_ALREADY_CONSUMED"
+                });
+            }
+
+            if (otpStatus.status === "expired") {
+                return res.status(400).json({
+                    success: false,
+                    message: "OTP has expired. Please request a new one",
+                    code: "OTP_EXPIRED"
+                });
+            }
+
+            const storedOTP = await storage.getValidOTP(email, otp, 'reset', {
+                ipAddress: req.ip,
+                userAgent: req.headers['user-agent']
+            });
+            
             if (!storedOTP) {
-                console.log(`❌ Reset OTP verification failed for ${email}`);
                 return res.status(400).json({
                     success: false,
                     message: "Invalid or expired OTP. Please request a new one."
                 });
             }
 
-            // Mark OTP as used
-            await storage.markOTPAsUsed(email, otp);
+            await storage.consumeOTP(email, otp, {
+                ipAddress: req.ip,
+                userAgent: req.headers['user-agent'],
+                consumptionSource: "password_reset"
+            });
 
-            // Generate JWT token for password reset
             const resetToken = jwt.sign(
                 {
                     id: storedOTP.userId,
@@ -509,16 +523,14 @@ export default function AuthRoutes(storage) {
                 { expiresIn: '10m' }
             );
 
-            console.log(`✅ Password reset OTP verified for: ${email}`);
-
             res.json({
                 success: true,
                 message: "OTP verified successfully",
-                resetToken: resetToken
+                resetToken: resetToken,
+                otpStatus: "consumed"
             });
 
         } catch (error) {
-            console.error("Reset OTP verification error:", error);
             res.status(500).json({
                 success: false,
                 message: "Internal server error"
@@ -526,7 +538,7 @@ export default function AuthRoutes(storage) {
         }
     });
 
-    // POST /api/auth/reset-password - Reset password with JWT token
+    // ==================== RESET PASSWORD ENDPOINT ====================
     router.post("/reset-password", async (req, res) => {
         try {
             const { resetToken, newPassword, confirmPassword } = req.body;
@@ -545,12 +557,10 @@ export default function AuthRoutes(storage) {
                 });
             }
 
-            // Verify reset token
             let decoded;
             try {
                 decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
             } catch (error) {
-                console.log(`❌ Invalid reset token:`, error.message);
                 return res.status(400).json({
                     success: false,
                     message: "Invalid or expired password reset token."
@@ -564,7 +574,6 @@ export default function AuthRoutes(storage) {
                 });
             }
 
-            // Retrieve user
             const user = await storage.getUserByEmail(decoded.email);
             if (!user) {
                 return res.status(404).json({
@@ -573,7 +582,6 @@ export default function AuthRoutes(storage) {
                 });
             }
 
-            // Check against old password
             if (user.password) {
                 const isSameAsOldPassword = await bcrypt.compare(newPassword, user.password);
                 if (isSameAsOldPassword) {
@@ -584,7 +592,6 @@ export default function AuthRoutes(storage) {
                 }
             }
 
-            // Hash and update new password
             const saltRounds = 10;
             const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
 
@@ -596,18 +603,116 @@ export default function AuthRoutes(storage) {
                 });
             }
 
-            console.log(`✅ Password reset successful for: ${decoded.email}`);
-
             res.json({
                 success: true,
                 message: "Password has been reset successfully."
             });
 
         } catch (error) {
-            console.error("❌ Password reset error:", error);
             res.status(500).json({
                 success: false,
                 message: "Internal server error"
+            });
+        }
+    });
+
+    // ==================== DEBUG ENDPOINTS (REMOVE IN PRODUCTION) ====================
+    router.get("/debug/otps", async (req, res) => {
+        try {
+            const { email } = req.query;
+            
+            await storage.debugOTPs(email);
+            
+            const totalOTPs = await storage.OTP.countDocuments();
+            const activeOTPs = await storage.OTP.countDocuments({ 
+                status: "pending", 
+                expiresAt: { $gt: new Date() } 
+            });
+            
+            res.json({
+                success: true,
+                message: "OTP debug information logged to console",
+                stats: {
+                    totalOTPs,
+                    activeOTPs,
+                    emailFilter: email || 'all emails',
+                    timestamp: new Date().toISOString()
+                }
+            });
+            
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: "Debug failed",
+                error: error.message
+            });
+        }
+    });
+
+    router.post("/test/otp", async (req, res) => {
+        try {
+            const { email } = req.body;
+            
+            if (!email) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Email is required"
+                });
+            }
+            
+            const otp = generateOTP();
+            
+            const otpResult = await storage.createOTP(email, otp, 'test');
+            
+            await storage.debugOTPs(email);
+            
+            res.json({
+                success: true,
+                message: "Test OTP created",
+                otpId: otpResult.id,
+                otp: otpResult.otp,
+                otpMasked: otpResult.maskedOtp
+            });
+            
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: "Test failed",
+                error: error.message
+            });
+        }
+    });
+
+    router.post("/test/email", async (req, res) => {
+        try {
+            const { email } = req.body;
+            
+            if (!email) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Email is required"
+                });
+            }
+            
+            const testResult = await sendOTPEmail(email, "999999", "test");
+            
+            res.json({
+                success: testResult.success,
+                message: testResult.success ? "Test email sent" : "Failed to send test email",
+                devMode: testResult.devMode,
+                error: testResult.error,
+                details: {
+                    emailConfigured: !!(process.env.EMAIL_USER && process.env.EMAIL_PASS),
+                    transporterAvailable: !!transporter,
+                    testOTP: "999999"
+                }
+            });
+            
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: "Test failed",
+                error: error.message
             });
         }
     });

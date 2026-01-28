@@ -1,4 +1,4 @@
-// src/schemas/index.js - FIXED USER SCHEMA WITH PROPER ZOD SYNTAX
+// src/schemas/index.js
 import { z } from "zod";
 
 // --- Custom validator for logo URL ---
@@ -32,12 +32,43 @@ const logoUrlSchema = z.string()
   .optional()
   .default('/assets/logos/default_logo.svg');
 
-// ------------------------------------------
+export const otpSchema = z.object({
+  id: z.string().uuid().optional(),
+  email: z.string().email("Invalid email format"),
+  originalOtp: z.string().length(6, "OTP must be 6 digits"), // Store original
+  maskedOtp: z.string().optional(), // Masked version for display
+  type: z.enum(["login", "reset", "verification"]).default("login"),
+  userId: z.string().uuid().optional().nullable(),
+  expiresAt: z.date(),
+  status: z.enum(["pending", "consumed", "expired", "revoked"]).default("pending"), // Changed from 'used'
+  consumedAt: z.date().optional().nullable(), // Changed from 'usedAt'
+  attempts: z.number().int().min(0).default(0),
+  ipAddress: z.string().optional(),
+  userAgent: z.string().optional(),
+  createdAt: z.date().default(() => new Date()),
+  updatedAt: z.date().default(() => new Date()),
+});
 
-// --- User Schemas ---
+export const insertOTPSchema = otpSchema.omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  expiresAt: z.date().optional().default(() => new Date(Date.now() + 10 * 60 * 1000)), // 10 minutes
+});
 
+export const updateOTPSchema = otpSchema.partial().extend({
+  id: z.string().uuid(),
+});
+
+export const OTP = otpSchema;
+export const InsertOTP = insertOTPSchema;
+export const UpdateOTP = updateOTPSchema;
+
+
+// ==================== USER SCHEMA ====================
 export const userSchema = z.object({
-  id: z.string().optional(), // UUID - auto-generated
+  id: z.string().uuid().optional(),
   username: z.string().min(1, "Username is required"),
   email: z.string().email("Invalid email format"),
   password: z.string().min(6, "Password must be at least 6 characters"),
@@ -52,17 +83,15 @@ export const userSchema = z.object({
     "Restaurant_Admin", "Restaurant_Manager", "Restaurant_Waiter", "Restaurant_Chef",
     "Retail_Admin", "Retail_Manager", "Retail_Cashier", "Retail_Sales_Associate",
   ]).default("Kiosk_Shopkeeper"),
-  
-  // CRITICAL: Store BOTH numeric and UUID business IDs for compatibility
-  businessId: z.number().int().positive().optional(), // Numeric business ID
-  businessUUID: z.string().uuid().optional(), // UUID business ID
-  
-  // Legacy/compatibility fields
+
+  businessId: z.number().int().positive().optional(),
+  businessUUID: z.string().uuid().optional(),
+
   businessName: z.string().optional(),
-  associatedBusinessId: z.string().optional(), // Can be numeric string or UUID
-  institutionId: z.string().optional(), // Can be numeric string or UUID
+  associatedBusinessId: z.string().optional(),
+  institutionId: z.string().optional(),
   institutionName: z.string().optional(),
-  
+
   status: z.enum(["ACTIVE", "INACTIVE"]).default("ACTIVE"),
   permissions: z.array(z.string()).default(["read", "write", "delete"]),
   lastLogin: z.string().default("Never"),
@@ -75,24 +104,20 @@ export const insertUserSchema = userSchema.omit({
   createdAt: true,
   updatedAt: true,
 }).extend({
-  // Make password required for new users
   password: z.string().min(6, "Password must be at least 6 characters long"),
 });
 
-// Update user schema (partial updates allowed)
 export const updateUserSchema = insertUserSchema.partial().extend({
-  id: z.string(),
+  id: z.string().uuid(),
 });
 
 export const User = userSchema;
 export const InsertUser = insertUserSchema;
 export const UpdateUser = updateUserSchema;
 
-// ------------------------------------------
-
-// Business schema with auto-increment businessId
+// ==================== BUSINESS SCHEMA ====================
 export const businessSchema = z.object({
-  id: z.string().optional(),
+  id: z.string().uuid().optional(),
   businessId: z.number().int().positive("Business ID must be a positive number"),
   businessName: z.string().min(1, "Business name is required"),
   registrationNumber: z.string().min(1, "Registration number is required"),
@@ -104,7 +129,7 @@ export const businessSchema = z.object({
   address: z.string().optional().default(""),
   website: z.string().url("Invalid URL format").or(z.literal("")).or(z.literal(null)).optional().default(""),
   description: z.string().optional().default(""),
-  logoUrl: logoUrlSchema, // Use custom validator instead of .url()
+  logoUrl: logoUrlSchema,
   primaryColor: z.string()
     .regex(/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, "Invalid hex color code")
     .default("#000000"),
@@ -116,22 +141,21 @@ export const businessSchema = z.object({
 
 export const insertBusinessSchema = businessSchema.omit({
   id: true,
-  businessId: true, // Remove businessId from insert - it will be auto-generated
+  businessId: true,
   createdAt: true,
   updatedAt: true,
 }).extend({
   logoFile: z.any().optional(),
 });
 
-// Update business schema (allow partial updates, including registrationNumber and owner)
 export const updateBusinessSchema = businessSchema.omit({
   id: true,
-  businessId: true, // businessId cannot be updated
+  businessId: true,
   createdAt: true,
   updatedAt: true,
 }).extend({
   logoFile: z.any().optional(),
-}).partial(); // All fields optional for updates
+}).partial();
 
 export const Business = businessSchema;
 export const InsertBusiness = insertBusinessSchema;
