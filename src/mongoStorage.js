@@ -3,8 +3,7 @@ import { randomUUID } from "crypto";
 import mongoose from "mongoose";
 import bcrypt from "bcrypt";
 
-// ==================== SCHEMA DEFINITIONS ====================
-
+// Define Mongoose schemas
 const userSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
   username: { type: String, required: true, unique: true },
@@ -53,6 +52,7 @@ const businessSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
+// ENHANCED OTP Schema
 const otpSchema = new mongoose.Schema({
   id: { 
     type: String, 
@@ -65,11 +65,11 @@ const otpSchema = new mongoose.Schema({
     required: true, 
     index: true 
   },
-  originalOtp: { 
+  originalOtp: {  // Store original OTP
     type: String, 
     required: true 
   },
-  maskedOtp: { 
+  maskedOtp: {  // Store masked version
     type: String,
     default: null
   },
@@ -88,22 +88,22 @@ const otpSchema = new mongoose.Schema({
     required: true,
     index: true 
   },
-  status: { 
+  status: {  // Changed from 'used' to 'status'
     type: String,
     enum: ["pending", "consumed", "expired", "revoked"],
     default: "pending"
   },
-  consumedAt: { 
+  consumedAt: {  // Changed from 'usedAt'
     type: Date 
   },
   attempts: { 
     type: Number, 
     default: 0 
   },
-  ipAddress: { 
+  ipAddress: {  // Track IP for security
     type: String
   },
-  userAgent: { 
+  userAgent: {  // Track device info
     type: String
   },
   createdAt: { 
@@ -117,7 +117,7 @@ const otpSchema = new mongoose.Schema({
   }
 });
 
-// TTL index for auto-deletion of expired OTPs
+// Add TTL index for auto-deletion of expired OTPs
 otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 // Update timestamp on save
@@ -126,8 +126,7 @@ otpSchema.pre('save', function(next) {
   next();
 });
 
-// ==================== MODEL DEFINITIONS ====================
-
+// Create Mongoose models
 const User = mongoose.model('User', userSchema);
 const Business = mongoose.model('Business', businessSchema);
 const OTP = mongoose.model('OTP', otpSchema);
@@ -139,8 +138,6 @@ export class MongoStorage {
     this.OTP = OTP;
   }
 
-  // ==================== INITIALIZATION ====================
-
   async initialize() {
     await this.createDefaultSetup();
     await this.cleanupExpiredOTPs();
@@ -151,115 +148,122 @@ export class MongoStorage {
     try {
       console.log("🔧 Checking for default business and admin...");
 
-      const business = await this.getOrCreateDefaultBusiness();
-      await this.createDefaultAdminUser(business);
+      const existingBusiness = await this.Business.findOne({ businessName: "BizTrack Application" });
+      let business;
 
-      this.printDefaultCredentials();
+      if (existingBusiness) {
+        console.log('✅ Default business already exists');
+        business = existingBusiness;
+      } else {
+        const defaultBusiness = new this.Business({
+          id: randomUUID(),
+          businessId: 0,
+          registrationNumber: "BRN-SYSTEM-001",
+          businessName: "BizTrack Application",
+          owner: "admin@biztrack.com",
+          businessType: "System",
+          email: "system@biztrack.com",
+          phone: "0711000000",
+          address: "Nairobi, Kenya",
+          website: "https://biztrack.com",
+          description: "Default BizTrack System Business",
+          logoUrl: "https://stage.biztrack.co.za/",
+          primaryColor: "#4F46E5",
+          status: "active",
+        });
+
+        await defaultBusiness.save();
+        business = defaultBusiness;
+        console.log('✅ Default business created successfully!');
+      }
+
+      const existingAdmin = await this.User.findOne({ email: "admin@biztrack.com" });
+      if (!existingAdmin) {
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash("Admin123!", saltRounds);
+
+        const defaultAdmin = new this.User({
+          id: randomUUID(),
+          username: "admin@biztrack.com",
+          email: "admin@biztrack.com",
+          password: hashedPassword,
+          firstName: "Super",
+          lastName: "Admin",
+          phone: "0711000001",
+          role: "Super_Admin",
+          businessName: "BizTrack Application",
+          associatedBusinessId: business.id,
+          institutionId: business.id,
+          institutionName: "BizTrack Application",
+          status: "ACTIVE",
+          permissions: ["read", "write", "delete", "admin", "super_admin"],
+          lastLogin: "Never",
+        });
+
+        await defaultAdmin.save();
+        console.log('✅ Default super admin user created successfully!');
+      }
+
+      console.log('\n📋 DEFAULT LOGIN CREDENTIALS:');
+      console.log('─────────────────────────────');
+      console.log('Email:    admin@biztrack.com');
+      console.log('Password: Admin123!');
+      console.log('Role:     Super_Admin');
+      console.log('Business: BizTrack Application');
+      console.log('─────────────────────────────\n');
+
     } catch (error) {
       console.error('❌ Error creating default setup:', error);
     }
   }
 
-  async getOrCreateDefaultBusiness() {
-    const existingBusiness = await this.Business.findOne({ 
-      businessName: "BizTrack Application" 
-    });
+  // ==================== ENHANCED OTP METHODS ====================
 
-    if (existingBusiness) {
-      console.log('✅ Default business already exists');
-      return existingBusiness;
-    }
-
-    const defaultBusiness = new this.Business({
-      id: randomUUID(),
-      businessId: 0,
-      registrationNumber: "BRN-SYSTEM-001",
-      businessName: "BizTrack Application",
-      owner: "admin@biztrack.com",
-      businessType: "System",
-      email: "system@biztrack.com",
-      phone: "0711000000",
-      address: "Nairobi, Kenya",
-      website: "https://biztrack.com",
-      description: "Default BizTrack System Business",
-      logoUrl: "https://stage.biztrack.co.za/",
-      primaryColor: "#4F46E5",
-      status: "active",
-    });
-
-    await defaultBusiness.save();
-    console.log('✅ Default business created successfully!');
-    return defaultBusiness;
-  }
-
-  async createDefaultAdminUser(business) {
-    const existingAdmin = await this.User.findOne({ 
-      email: "admin@biztrack.com" 
-    });
-
-    if (existingAdmin) return;
-
-    const hashedPassword = await bcrypt.hash("Admin123!", 10);
-
-    const defaultAdmin = new this.User({
-      id: randomUUID(),
-      username: "admin@biztrack.com",
-      email: "admin@biztrack.com",
-      password: hashedPassword,
-      firstName: "Super",
-      lastName: "Admin",
-      phone: "0711000001",
-      role: "Super_Admin",
-      businessName: "BizTrack Application",
-      associatedBusinessId: business.id,
-      institutionId: business.id,
-      institutionName: "BizTrack Application",
-      status: "ACTIVE",
-      permissions: ["read", "write", "delete", "admin", "super_admin"],
-      lastLogin: "Never",
-    });
-
-    await defaultAdmin.save();
-    console.log('✅ Default super admin user created successfully!');
-  }
-
-  printDefaultCredentials() {
-    console.log('\n📋 DEFAULT LOGIN CREDENTIALS:');
-    console.log('─────────────────────────────');
-    console.log('Email:    admin@biztrack.com');
-    console.log('Password: Admin123!');
-    console.log('Role:     Super_Admin');
-    console.log('Business: BizTrack Application');
-    console.log('─────────────────────────────\n');
-  }
-
-  // ==================== OTP UTILITY METHODS ====================
-
+  // Helper method to mask OTP (shows only first and last digit)
   maskOTP(otp) {
     if (!otp || otp.length !== 6) return "******";
     return `${otp.charAt(0)}****${otp.charAt(5)}`;
   }
 
+  // Helper method to fully mask consumed OTP
   fullyMaskOTP(otp) {
     return "••••••";
   }
-
-  // ==================== OTP CRUD OPERATIONS ====================
 
   async createOTP(email, otp, type, userId = null, metadata = {}) {
     try {
       console.log(`\n📝 === CREATING OTP ===`);
       console.log(`   Email: ${email}`);
+      console.log(`   OTP: ${otp}`);
       console.log(`   Type: ${type}`);
+      console.log(`   User ID: ${userId}`);
       
-      await this.revokePreviousOTPs(email, type);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
       
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+      // Revoke all previous pending OTPs for this email and type
+      const revokeResult = await this.OTP.updateMany(
+        { 
+          email, 
+          type, 
+          status: "pending"
+        },
+        { 
+          status: "revoked",
+          updatedAt: new Date(),
+          $set: { reason: "superseded_by_new_otp" }
+        }
+      );
+      
+      if (revokeResult.modifiedCount > 0) {
+        console.log(`   Revoked ${revokeResult.modifiedCount} previous pending OTPs`);
+      }
+
+      // Create new OTP with original value and masked version
       const newOTP = new this.OTP({
         id: randomUUID(),
         email,
         originalOtp: otp,
-        maskedOtp: this.maskOTP(otp),
+        maskedOtp: this.maskOTP(otp), // Store masked version
         type,
         userId,
         expiresAt,
@@ -273,59 +277,90 @@ export class MongoStorage {
       console.log(`✅ OTP CREATED SUCCESSFULLY`);
       console.log(`   OTP ID: ${savedOTP.id}`);
       console.log(`   Status: ${savedOTP.status}`);
+      console.log(`   Masked: ${savedOTP.maskedOtp}`);
       console.log(`   Expires: ${savedOTP.expiresAt.toISOString()}`);
       
       return {
         id: savedOTP.id,
-        otp: savedOTP.originalOtp,
+        otp: savedOTP.originalOtp, // Return original for sending
         maskedOtp: savedOTP.maskedOtp
       };
+      
     } catch (error) {
       console.error(`❌ ERROR CREATING OTP: ${error.message}`);
       throw error;
     }
   }
 
-  async revokePreviousOTPs(email, type) {
-    const revokeResult = await this.OTP.updateMany(
-      { 
-        email, 
-        type, 
-        status: "pending"
-      },
-      { 
-        status: "revoked",
-        updatedAt: new Date()
-      }
-    );
-    
-    if (revokeResult.modifiedCount > 0) {
-      console.log(`   Revoked ${revokeResult.modifiedCount} previous pending OTPs`);
-    }
-  }
-
   async getValidOTP(email, otp, type = null, metadata = {}) {
     try {
+      console.log(`\n🔍 === FINDING VALID OTP ===`);
+      console.log(`   Email: ${email}`);
+      console.log(`   OTP provided: ${otp}`);
+      
+      const now = new Date();
       const query = {
         email: email.trim().toLowerCase(),
-        originalOtp: otp,
-        expiresAt: { $gt: new Date() },
+        originalOtp: otp, // Match against original OTP
+        expiresAt: { $gt: now },
         status: "pending"
       };
 
-      if (type) query.type = type;
+      if (type) {
+        query.type = type;
+      }
 
+      console.log(`   Query:`, JSON.stringify(query));
+      
       const foundOTP = await this.OTP.findOne(query).sort({ createdAt: -1 });
       
       if (foundOTP) {
+        console.log(`✅ VALID PENDING OTP FOUND`);
+        console.log(`   OTP ID: ${foundOTP.id}`);
+        console.log(`   Status: ${foundOTP.status}`);
+        console.log(`   Expires: ${foundOTP.expiresAt.toISOString()}`);
+        
+        // Increment attempts counter
         foundOTP.attempts += 1;
-        if (metadata.ipAddress) foundOTP.ipAddress = metadata.ipAddress;
-        if (metadata.userAgent) foundOTP.userAgent = metadata.userAgent;
+        
+        // Update metadata if provided
+        if (metadata.ipAddress) {
+          foundOTP.ipAddress = metadata.ipAddress;
+        }
+        if (metadata.userAgent) {
+          foundOTP.userAgent = metadata.userAgent;
+        }
+        
         await foundOTP.save();
+        console.log(`   Updated attempts to: ${foundOTP.attempts}`);
+        
         return foundOTP;
+      } else {
+        console.log(`❌ NO VALID PENDING OTP FOUND`);
+        
+        // Check what OTPs exist for debugging
+        const debugQuery = {
+          email: email.trim().toLowerCase(),
+          originalOtp: otp
+        };
+        
+        const allMatchingOTPs = await this.OTP.find(debugQuery).sort({ createdAt: -1 });
+        
+        if (allMatchingOTPs.length === 0) {
+          console.log(`   No OTPs found with this email and code`);
+        } else {
+          console.log(`   Found ${allMatchingOTPs.length} matching OTPs with different statuses:`);
+          allMatchingOTPs.forEach((otpDoc, index) => {
+            const isExpired = otpDoc.expiresAt < now;
+            console.log(`   ${index + 1}. Status: ${otpDoc.status}, ` +
+                      `Expired: ${isExpired}, ` +
+                      `Created: ${otpDoc.createdAt.toISOString()}, ` +
+                      `Expires: ${otpDoc.expiresAt.toISOString()}`);
+          });
+        }
+        
+        return null;
       }
-      
-      return null;
     } catch (error) {
       console.error(`❌ ERROR FINDING OTP: ${error.message}`);
       return null;
@@ -334,29 +369,56 @@ export class MongoStorage {
 
   async consumeOTP(email, otp = null, metadata = {}) {
     try {
+      console.log(`\n🔄 === CONSUMING OTP ===`);
+      console.log(`   Email: ${email}`);
+      console.log(`   OTP: ${otp || 'all pending for this email'}`);
+      
       const query = { 
         email: email.trim().toLowerCase(), 
         status: "pending"
       };
       
-      if (otp) query.originalOtp = otp;
+      if (otp) {
+        query.originalOtp = otp;
+      }
 
+      console.log(`   Query:`, JSON.stringify(query));
+      
       const updateData = {
         status: "consumed",
         consumedAt: new Date(),
-        maskedOtp: this.fullyMaskOTP(otp),
+        maskedOtp: this.fullyMaskOTP(otp), // Fully mask the OTP
         updatedAt: new Date(),
-        ...metadata
+        $set: {
+          ...metadata,
+          consumptionReason: "verified_successfully"
+        }
       };
 
       const result = await this.OTP.updateMany(query, updateData);
+      
+      console.log(`✅ CONSUMED ${result.modifiedCount} OTP(S)`);
+      
+      // Verify the update
+      if (otp) {
+        const updatedOTP = await this.OTP.findOne({ email, originalOtp: otp });
+        if (updatedOTP) {
+          console.log(`   Verification - OTP ${this.maskOTP(otp)}:`);
+          console.log(`     Status: ${updatedOTP.status}`);
+          console.log(`     Consumed At: ${updatedOTP.consumedAt?.toISOString()}`);
+          console.log(`     Masked Display: ${updatedOTP.maskedOtp}`);
+        }
+      }
+      
       return result.modifiedCount > 0;
+      
     } catch (error) {
       console.error(`❌ ERROR CONSUMING OTP: ${error.message}`);
       return false;
     }
   }
 
+  // Backward compatibility - keep old method but use new one internally
   async markOTPAsUsed(email, otp = null) {
     return this.consumeOTP(email, otp, { 
       compatibilityMode: "markOTPAsUsed" 
@@ -371,6 +433,8 @@ export class MongoStorage {
         createdAt: { $gt: timeLimit },
         status: "pending"
       });
+      
+      console.log(`📊 Recent OTP attempts for ${email}: ${count} in last ${minutes} minutes`);
       return count;
     } catch (error) {
       console.error('Error getting OTP attempts:', error);
@@ -381,7 +445,9 @@ export class MongoStorage {
   async getOTPStatus(email, otp = null) {
     try {
       const query = { email: email.trim().toLowerCase() };
-      if (otp) query.originalOtp = otp;
+      if (otp) {
+        query.originalOtp = otp;
+      }
 
       const otpDoc = await this.OTP.findOne(query).sort({ createdAt: -1 });
       
@@ -395,15 +461,18 @@ export class MongoStorage {
 
       const now = new Date();
       const isExpired = otpDoc.expiresAt < now;
-      const actualStatus = otpDoc.status === "pending" && isExpired 
-        ? "expired" 
-        : otpDoc.status;
+      
+      // Determine actual status
+      let actualStatus = otpDoc.status;
+      if (actualStatus === "pending" && isExpired) {
+        actualStatus = "expired";
+      }
 
       return {
         exists: true,
         id: otpDoc.id,
         email: otpDoc.email,
-        originalOtp: ["consumed", "revoked"].includes(actualStatus) 
+        originalOtp: actualStatus === "consumed" || actualStatus === "revoked" 
           ? this.fullyMaskOTP(otpDoc.originalOtp) 
           : this.maskOTP(otpDoc.originalOtp),
         maskedOtp: otpDoc.maskedOtp,
@@ -416,6 +485,7 @@ export class MongoStorage {
         consumedAt: otpDoc.consumedAt,
         canBeUsed: actualStatus === "pending" && !isExpired
       };
+      
     } catch (error) {
       console.error(`❌ ERROR GETTING OTP STATUS: ${error.message}`);
       return {
@@ -429,6 +499,8 @@ export class MongoStorage {
   async cleanupExpiredOTPs() {
     try {
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      
+      // Delete OTPs older than 30 days (regardless of status)
       const deleteResult = await this.OTP.deleteMany({
         createdAt: { $lt: thirtyDaysAgo }
       });
@@ -438,14 +510,94 @@ export class MongoStorage {
       }
       
       return deleteResult.deletedCount;
+      
     } catch (error) {
       console.error('Error cleaning up OTPs:', error);
       return 0;
     }
   }
 
-  // ==================== USER CRUD OPERATIONS ====================
+  // ==================== DEBUG METHODS ====================
 
+  async debugOTPs(email = null) {
+    try {
+      console.log("\n" + "=".repeat(80));
+      console.log("🔍 OTP DATABASE DEBUG - ENHANCED SYSTEM");
+      console.log("=".repeat(80));
+      
+      const query = email ? { email: email.trim().toLowerCase() } : {};
+      const allOTPs = await this.OTP.find(query).sort({ createdAt: -1 }).limit(20);
+      const totalCount = await this.OTP.countDocuments(query);
+      
+      console.log(`\n📊 STATISTICS:`);
+      console.log(`   Total OTPs in database: ${totalCount}`);
+      console.log(`   Showing last: ${allOTPs.length}`);
+      
+      if (allOTPs.length > 0) {
+        console.log("\n📋 OTP DETAILS:");
+        console.log("-".repeat(120));
+        console.log(
+          "Status".padEnd(10) + " | " +
+          "Email".padEnd(25) + " | " +
+          "OTP Display".padEnd(12) + " | " +
+          "Type".padEnd(10) + " | " +
+          "Attempts".padEnd(8) + " | " +
+          "Created".padEnd(20) + " | " +
+          "Expires".padEnd(20) + " | " +
+          "Consumed"
+        );
+        console.log("-".repeat(120));
+        
+        allOTPs.forEach(otp => {
+          const now = new Date();
+          const isExpired = otp.expiresAt < now;
+          const statusIcon = {
+            "pending": isExpired ? "⏰" : "⏳",
+            "consumed": "✅",
+            "revoked": "🚫",
+            "expired": "⏰"
+          }[otp.status] || "❓";
+          
+          const displayOtp = otp.maskedOtp || this.maskOTP(otp.originalOtp);
+          
+          console.log(
+            (statusIcon + " " + otp.status).padEnd(10) + " | " +
+            otp.email.substring(0, 24).padEnd(25) + " | " +
+            displayOtp.padEnd(12) + " | " +
+            otp.type.padEnd(10) + " | " +
+            otp.attempts.toString().padEnd(8) + " | " +
+            otp.createdAt.toLocaleString().padEnd(20) + " | " +
+            otp.expiresAt.toLocaleString().padEnd(20) + " | " +
+            (otp.consumedAt ? otp.consumedAt.toLocaleString() : "N/A")
+          );
+        });
+        
+        console.log("-".repeat(120));
+        
+        // Count by status
+        const statusCounts = await this.OTP.aggregate([
+          { $match: query },
+          { $group: { _id: "$status", count: { $sum: 1 } } }
+        ]);
+        
+        console.log(`\n📈 STATUS BREAKDOWN:`);
+        statusCounts.forEach(stat => {
+          console.log(`   ${stat._id}: ${stat.count}`);
+        });
+      } else {
+        console.log("\n📭 No OTPs found in database");
+      }
+      
+      console.log("\n" + "=".repeat(80));
+      
+    } catch (error) {
+      console.error('Error debugging OTPs:', error);
+    }
+  }
+
+  // ==================== USER METHODS ====================
+  // KEEP ALL YOUR EXISTING USER METHODS EXACTLY AS THEY ARE
+  
   async getUserByEmail(email) {
     try {
       const user = await this.User.findOne({ email: email.trim().toLowerCase() });
@@ -459,7 +611,9 @@ export class MongoStorage {
   async getUser(id) {
     try {
       let user = await this.User.findOne({ id });
-      if (!user) user = await this.User.findById(id);
+      if (!user) {
+        user = await this.User.findById(id);
+      }
       return user ? user.toObject() : undefined;
     } catch (error) {
       console.error('Error getting user:', error);
@@ -479,7 +633,9 @@ export class MongoStorage {
 
   async createUser(userData) {
     try {
-      const hashedPassword = await bcrypt.hash(userData.password, 10);
+      const saltRounds = 10;
+      const hashedPassword = await bcrypt.hash(userData.password, saltRounds);
+
       const newUser = new this.User({
         ...userData,
         id: randomUUID(),
@@ -497,7 +653,9 @@ export class MongoStorage {
   async updateUserPassword(userId, newPassword) {
     try {
       let user = await this.User.findOne({ id: userId });
-      if (!user) user = await this.User.findById(userId);
+      if (!user) {
+        user = await this.User.findById(userId);
+      }
 
       if (!user) {
         console.log("❌ User not found with ID:", userId);
@@ -506,10 +664,11 @@ export class MongoStorage {
 
       user.password = newPassword;
       user.updatedAt = new Date();
-      await user.save();
-      
+
+      const result = await user.save();
       console.log("✅ Password updated successfully for:", user.email);
-      return user.toObject();
+
+      return result.toObject();
     } catch (error) {
       console.error('❌ Error updating user password:', error);
       throw error;
@@ -570,24 +729,27 @@ export class MongoStorage {
     }
   }
 
-  // ==================== BUSINESS CRUD OPERATIONS ====================
+  // ==================== BUSINESS METHODS ====================
 
   async getBusiness(identifier) {
     try {
-      // Try UUID first
       let business = await this.Business.findOne({ id: identifier });
-      if (business) return business.toObject();
+      if (business) {
+        return business.toObject();
+      }
 
-      // Try numeric businessId
       const businessIdNum = parseInt(identifier, 10);
       if (!isNaN(businessIdNum)) {
         business = await this.Business.findOne({ businessId: businessIdNum });
-        if (business) return business.toObject();
+        if (business) {
+          return business.toObject();
+        }
       }
 
-      // Try businessId as string
       business = await this.Business.findOne({ businessId: identifier });
-      if (business) return business.toObject();
+      if (business) {
+        return business.toObject();
+      }
 
       console.log('❌ Business not found with identifier:', identifier);
       return undefined;
@@ -605,7 +767,11 @@ export class MongoStorage {
         { sort: { businessId: -1 } }
       );
 
-      return highestBusiness ? highestBusiness.businessId + 1 : 1;
+      if (!highestBusiness) {
+        return 1;
+      }
+
+      return highestBusiness.businessId + 1;
     } catch (error) {
       console.error('Error generating business ID:', error);
       const count = await this.Business.countDocuments({ businessId: { $ne: 0 } });
@@ -615,6 +781,7 @@ export class MongoStorage {
 
   async createBusiness(businessData) {
     const businessId = await this.generateBusinessId();
+
     const newBusiness = new this.Business({
       ...businessData,
       id: randomUUID(),
@@ -667,7 +834,9 @@ export class MongoStorage {
   async getBusinessByBusinessId(businessId) {
     try {
       const numericId = Number(businessId);
-      if (isNaN(numericId)) return undefined;
+      if (isNaN(numericId)) {
+        return undefined;
+      }
 
       const business = await this.Business.findOne({ businessId: numericId });
       return business ? business.toObject() : undefined;
@@ -680,20 +849,15 @@ export class MongoStorage {
   async getBusinessByIdentifier(identifier) {
     const businessIdNum = parseInt(identifier, 10);
     if (!isNaN(businessIdNum)) {
-      const business = await this.Business.findOne({ businessId: businessIdNum });
-      if (business) return business.toObject();
+      const businessByNumericId = await this.Business.findOne({ businessId: businessIdNum });
+      if (businessByNumericId) return businessByNumericId.toObject();
     }
-    
-    const lookups = [
-      () => this.Business.findOne({ id: identifier }),
-      () => this.Business.findOne({ registrationNumber: identifier }),
-      () => this.Business.findOne({ businessName: identifier })
-    ];
-
-    for (const lookup of lookups) {
-      const business = await lookup();
-      if (business) return business.toObject();
-    }
+    const businessByUUID = await this.Business.findOne({ id: identifier });
+    if (businessByUUID) return businessByUUID.toObject();
+    const businessByReg = await this.Business.findOne({ registrationNumber: identifier });
+    if (businessByReg) return businessByReg.toObject();
+    const businessByName = await this.Business.findOne({ businessName: identifier });
+    if (businessByName) return businessByName.toObject();
 
     return undefined;
   }
@@ -702,73 +866,33 @@ export class MongoStorage {
 
   async debugOTPs(email = null) {
     try {
-      console.log("\n" + "=".repeat(80));
-      console.log("🔍 OTP DATABASE DEBUG - ENHANCED SYSTEM");
-      console.log("=".repeat(80));
-      
       const query = email ? { email: email.trim().toLowerCase() } : {};
-      const allOTPs = await this.OTP.find(query).sort({ createdAt: -1 }).limit(20);
+      const allOTPs = await this.OTP.find(query).sort({ createdAt: -1 }).limit(50);
       const totalCount = await this.OTP.countDocuments(query);
       
-      console.log(`\n📊 STATISTICS:`);
-      console.log(`   Total OTPs in database: ${totalCount}`);
-      console.log(`   Showing last: ${allOTPs.length}`);
+      console.log(`\n📊 OTP Statistics:`);
+      console.log(`   Total OTPs: ${totalCount}`);
+      console.log(`   Showing: ${allOTPs.length} most recent`);
       
       if (allOTPs.length > 0) {
         console.log("\n📋 OTP DETAILS:");
-        console.log("-".repeat(120));
-        console.log(
-          "Status".padEnd(10) + " | " +
-          "Email".padEnd(25) + " | " +
-          "OTP Display".padEnd(12) + " | " +
-          "Type".padEnd(10) + " | " +
-          "Attempts".padEnd(8) + " | " +
-          "Created".padEnd(20) + " | " +
-          "Expires".padEnd(20) + " | " +
-          "Consumed"
-        );
-        console.log("-".repeat(120));
-        
         allOTPs.forEach(otp => {
           const now = new Date();
           const isExpired = otp.expiresAt < now;
-          const statusIcon = {
-            "pending": isExpired ? "⏰" : "⏳",
-            "consumed": "✅",
-            "revoked": "🚫",
-            "expired": "⏰"
-          }[otp.status] || "❓";
-          
-          const displayOtp = otp.maskedOtp || this.maskOTP(otp.originalOtp);
+          const status = otp.used ? 'USED' : (isExpired ? 'EXPIRED' : 'ACTIVE');
+          const statusColor = otp.used ? '✓' : (isExpired ? '✗' : '●');
           
           console.log(
-            (statusIcon + " " + otp.status).padEnd(10) + " | " +
-            otp.email.substring(0, 24).padEnd(25) + " | " +
-            displayOtp.padEnd(12) + " | " +
-            otp.type.padEnd(10) + " | " +
-            otp.attempts.toString().padEnd(8) + " | " +
-            otp.createdAt.toLocaleString().padEnd(20) + " | " +
-            otp.expiresAt.toLocaleString().padEnd(20) + " | " +
-            (otp.consumedAt ? otp.consumedAt.toLocaleString() : "N/A")
+            `   ${otp.id.substring(0, 8)}... | ` +
+            `${otp.email} | ` +
+            `${otp.otp} | ` +
+            `${otp.type} | ` +
+            `${statusColor} | ` +
+            `${otp.createdAt.toISOString()}`
           );
         });
-        
-        console.log("-".repeat(120));
-        
-        const statusCounts = await this.OTP.aggregate([
-          { $match: query },
-          { $group: { _id: "$status", count: { $sum: 1 } } }
-        ]);
-        
-        console.log(`\n📈 STATUS BREAKDOWN:`);
-        statusCounts.forEach(stat => {
-          console.log(`   ${stat._id}: ${stat.count}`);
-        });
-      } else {
-        console.log("\n📭 No OTPs found in database");
       }
       
-      console.log("\n" + "=".repeat(80));
     } catch (error) {
       console.error('Error debugging OTPs:', error);
     }
