@@ -34,6 +34,9 @@ const createProduct = async (req, res) => {
       createdBy: req.user?.id
     });
 
+    // Normalize SKU
+    const normalizedSku = sku.trim().toUpperCase();
+
     // Determine the ID to use
     let locationId = kioskId || businessId;
     let locationType = kioskId ? 'kioskId' : 'businessId';
@@ -73,47 +76,73 @@ const createProduct = async (req, res) => {
       });
     }
 
+    // ✅ CRITICAL: Create query based on location type
+    let skuCheckQuery = {};
+
+    if (kioskId) {
+      // Check SKU within same kiosk only
+      skuCheckQuery = {
+        sku: normalizedSku,
+        kioskId: kioskId // Match exact kiosk
+      };
+    } else if (businessId) {
+      // Check SKU within same business only
+      skuCheckQuery = {
+        sku: normalizedSku,
+        businessId: parseInt(businessId) // Match exact business ID
+      };
+    }
+
+    console.log('🔍 SKU Check Query:', skuCheckQuery);
+
+    // ✅ Check for existing SKU ONLY in the same location
+    const existingProduct = await Product.findOne(skuCheckQuery);
+
+    if (existingProduct) {
+      console.log('❌ SKU already exists in this location:', existingProduct);
+      const locationName = existingProduct.kioskId ? 'kiosk' : 'business';
+      return res.status(400).json({
+        success: false,
+        message: `SKU "${normalizedSku}" already exists in this ${locationName}.`,
+        details: {
+          existingProduct: {
+            name: existingProduct.name,
+            sku: existingProduct.sku,
+            locationId: existingProduct.kioskId || existingProduct.businessId,
+            locationType: existingProduct.kioskId ? 'kiosk' : 'business'
+          }
+        }
+      });
+    }
+
     // Create product data
     const productData = {
-      name,
-      sku,
-      category,
-      stock,
-      unit,
-      buyingPrice,
-      price,
-      threshold,
-      createdBy: req.user.id, // This should be a UUID string
-      businessUUID
+      name: name.trim(),
+      sku: normalizedSku,
+      category: category.trim(),
+      stock: parseInt(stock) || 0,
+      unit: unit.trim(),
+      buyingPrice: parseFloat(buyingPrice),
+      price: parseFloat(price),
+      threshold: parseInt(threshold) || 0,
+      createdBy: req.user.id, // This is a UUID string
+      businessUUID: businessUUID || null
     };
 
     // Set the appropriate ID field
     if (kioskId) {
       productData.kioskId = kioskId;
+      // Clear business fields for kiosk products
+      delete productData.businessId;
+      delete productData.businessUUID;
     } else {
-      productData.businessId = businessId;
+      // For business products, ensure businessId is number
+      productData.businessId = parseInt(businessId);
+      // Clear kiosk field
+      delete productData.kioskId;
     }
 
-    console.log('📦 Product data for creation:', productData);
-
-    // Check for existing SKU in the same location
-    const existingProduct = await Product.findOne({
-      sku,
-      $or: [
-        { kioskId: kioskId || null },
-        { businessId: businessId || null }
-      ].filter(condition => {
-        const value = Object.values(condition)[0];
-        return value !== null && value !== undefined && value !== '';
-      })
-    });
-
-    if (existingProduct) {
-      return res.status(400).json({
-        success: false,
-        message: 'SKU already exists in this location'
-      });
-    }
+    console.log('📦 Final Product Data:', productData);
 
     // Create product
     const product = await Product.create(productData);
@@ -129,9 +158,11 @@ const createProduct = async (req, res) => {
     console.error('❌ Create product error:', error);
 
     if (error.code === 11000) {
+      // MongoDB duplicate key error - should be caught by our manual check above
       return res.status(400).json({
         success: false,
-        message: 'SKU already exists'
+        message: 'Duplicate SKU detected. SKU must be unique within the same location.',
+        error: error.keyValue
       });
     }
 
@@ -146,7 +177,8 @@ const createProduct = async (req, res) => {
 
     res.status(500).json({
       success: false,
-      message: 'Server error creating product'
+      message: 'Server error creating product',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -295,6 +327,11 @@ const updateProduct = async (req, res) => {
       });
     }
 
+    // Normalize SKU if being updated
+    if (updateData.sku) {
+      updateData.sku = updateData.sku.trim().toUpperCase();
+    }
+
     // Update status based on stock
     if (updateData.stock !== undefined || updateData.threshold !== undefined) {
       const stock = updateData.stock !== undefined ? updateData.stock : existingProduct.stock;
@@ -322,22 +359,33 @@ const updateProduct = async (req, res) => {
       }
     }
 
-    // Check for duplicate SKU in the same location
+    // ✅ CRITICAL: Check for duplicate SKU only within the same location
     if (updateData.sku && updateData.sku !== existingProduct.sku) {
-      const locationQuery = existingProduct.kioskId
-        ? { kioskId: existingProduct.kioskId }
-        : { businessId: existingProduct.businessId };
-
-      const duplicateProduct = await Product.findOne({
+      let skuCheckQuery = {
         sku: updateData.sku,
-        _id: { $ne: id },
-        ...locationQuery
-      });
+        _id: { $ne: id } // Exclude current product
+      };
+
+      // Check within same location only
+      if (existingProduct.kioskId) {
+        skuCheckQuery.kioskId = existingProduct.kioskId;
+      } else if (existingProduct.businessId) {
+        skuCheckQuery.businessId = existingProduct.businessId;
+      }
+
+      const duplicateProduct = await Product.findOne(skuCheckQuery);
 
       if (duplicateProduct) {
+        const locationType = existingProduct.kioskId ? 'kiosk' : 'business';
         return res.status(400).json({
           success: false,
-          message: 'SKU already exists in this location'
+          message: `SKU "${updateData.sku}" already exists in this ${locationType}`,
+          details: {
+            existingProduct: {
+              name: duplicateProduct.name,
+              sku: duplicateProduct.sku
+            }
+          }
         });
       }
     }
@@ -370,13 +418,15 @@ const updateProduct = async (req, res) => {
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
-        message: 'SKU already exists'
+        message: 'SKU already exists in this location',
+        error: error.keyValue
       });
     }
 
     res.status(500).json({
       success: false,
-      message: 'Server error updating product'
+      message: 'Server error updating product',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
