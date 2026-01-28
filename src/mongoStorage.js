@@ -54,39 +54,39 @@ const businessSchema = new mongoose.Schema({
 
 // OTP Schema
 const otpSchema = new mongoose.Schema({
-  id: { 
-    type: String, 
-    required: true, 
-    unique: true, 
-    default: () => randomUUID() 
+  id: {
+    type: String,
+    required: true,
+    unique: true,
+    default: () => randomUUID()
   },
-  email: { 
-    type: String, 
-    required: true, 
-    index: true 
+  email: {
+    type: String,
+    required: true,
+    index: true
   },
   originalOtp: {
-    type: String, 
-    required: true 
+    type: String,
+    required: true
   },
   maskedOtp: {
     type: String,
     default: null
   },
-  type: { 
-    type: String, 
-    required: true, 
-    enum: ["login", "reset", "verification"],
-    default: "login" 
-  },
-  userId: { 
-    type: String, 
-    index: true 
-  },
-  expiresAt: { 
-    type: Date, 
+  type: {
+    type: String,
     required: true,
-    index: true 
+    enum: ["login", "reset", "verification"],
+    default: "login"
+  },
+  userId: {
+    type: String,
+    index: true
+  },
+  expiresAt: {
+    type: Date,
+    required: true,
+    index: true
   },
   status: {
     type: String,
@@ -94,11 +94,11 @@ const otpSchema = new mongoose.Schema({
     default: "pending"
   },
   consumedAt: {
-    type: Date 
+    type: Date
   },
-  attempts: { 
-    type: Number, 
-    default: 0 
+  attempts: {
+    type: Number,
+    default: 0
   },
   ipAddress: {
     type: String
@@ -106,14 +106,14 @@ const otpSchema = new mongoose.Schema({
   userAgent: {
     type: String
   },
-  createdAt: { 
-    type: Date, 
+  createdAt: {
+    type: Date,
     default: Date.now,
-    index: true 
+    index: true
   },
-  updatedAt: { 
-    type: Date, 
-    default: Date.now 
+  updatedAt: {
+    type: Date,
+    default: Date.now
   }
 });
 
@@ -121,7 +121,7 @@ const otpSchema = new mongoose.Schema({
 otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 // Update timestamp on save
-otpSchema.pre('save', function(next) {
+otpSchema.pre('save', function (next) {
   this.updatedAt = new Date();
   next();
 });
@@ -141,7 +141,6 @@ export class MongoStorage {
   async initialize() {
     await this.createDefaultSetup();
     await this.cleanupExpiredOTPs();
-    console.log("MongoStorage initialized");
   }
 
   async createDefaultSetup() {
@@ -171,7 +170,6 @@ export class MongoStorage {
 
         await defaultBusiness.save();
         business = defaultBusiness;
-        console.log("Default business created");
       }
 
       const existingAdmin = await this.User.findOne({ email: "admin@biztrack.com" });
@@ -198,12 +196,10 @@ export class MongoStorage {
         });
 
         await defaultAdmin.save();
-        console.log("Default admin user created");
       }
 
     } catch (error) {
-      console.error("Error creating default setup:", error.message);
-      throw error;
+      throw new Error(`Error creating default setup: ${error.message}`);
     }
   }
 
@@ -220,18 +216,18 @@ export class MongoStorage {
 
   async createOTP(email, otp, type, userId = null, metadata = {}) {
     try {
-      console.log(`OTP created for ${email}: ${this.maskOTP(otp)} (type: ${type})`);
-      
+      console.log(`OTP created for ${email}: ${otp} (type: ${type})`);
+
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-      
+
       // Revoke previous pending OTPs
       await this.OTP.updateMany(
-        { 
-          email, 
-          type, 
+        {
+          email,
+          type,
           status: "pending"
         },
-        { 
+        {
           status: "revoked",
           updatedAt: new Date()
         }
@@ -251,13 +247,13 @@ export class MongoStorage {
       });
 
       const savedOTP = await newOTP.save();
-      
+
       return {
         id: savedOTP.id,
         otp: savedOTP.originalOtp,
         maskedOtp: savedOTP.maskedOtp
       };
-      
+
     } catch (error) {
       console.error(`Error creating OTP for ${email}:`, error.message);
       throw error;
@@ -277,25 +273,25 @@ export class MongoStorage {
       if (type) {
         query.type = type;
       }
-      
+
       const foundOTP = await this.OTP.findOne(query).sort({ createdAt: -1 });
-      
+
       if (foundOTP) {
-        console.log(`OTP verified for ${email}: ${this.maskOTP(otp)}`);
+        console.log(`OTP verified for ${email}: ${otp}`);
         foundOTP.attempts += 1;
-        
+
         if (metadata.ipAddress) {
           foundOTP.ipAddress = metadata.ipAddress;
         }
         if (metadata.userAgent) {
           foundOTP.userAgent = metadata.userAgent;
         }
-        
+
         await foundOTP.save();
         return foundOTP;
       }
-      
-      console.log(`Invalid OTP attempt for ${email}: ${this.maskOTP(otp)}`);
+
+      console.log(`Invalid OTP attempt for ${email}: ${otp}`);
       return null;
     } catch (error) {
       console.error(`Error verifying OTP for ${email}:`, error.message);
@@ -305,11 +301,11 @@ export class MongoStorage {
 
   async consumeOTP(email, otp = null, metadata = {}) {
     try {
-      const query = { 
-        email: email.trim().toLowerCase(), 
+      const query = {
+        email: email.trim().toLowerCase(),
         status: "pending"
       };
-      
+
       if (otp) {
         query.originalOtp = otp;
       }
@@ -326,13 +322,13 @@ export class MongoStorage {
       };
 
       const result = await this.OTP.updateMany(query, updateData);
-      
+
       if (result.modifiedCount > 0) {
-        console.log(`OTP consumed for ${email}`);
+        console.log(`OTP consumed for ${email}: ${otp || 'all pending OTPs'}`);
       }
-      
+
       return result.modifiedCount > 0;
-      
+
     } catch (error) {
       console.error(`Error consuming OTP for ${email}:`, error.message);
       throw error;
@@ -340,8 +336,8 @@ export class MongoStorage {
   }
 
   async markOTPAsUsed(email, otp = null) {
-    return this.consumeOTP(email, otp, { 
-      compatibilityMode: "markOTPAsUsed" 
+    return this.consumeOTP(email, otp, {
+      compatibilityMode: "markOTPAsUsed"
     });
   }
 
@@ -353,11 +349,10 @@ export class MongoStorage {
         createdAt: { $gt: timeLimit },
         status: "pending"
       });
-      
+
       return count;
     } catch (error) {
-      console.error(`Error getting OTP attempts for ${email}:`, error.message);
-      throw error;
+      throw new Error(`Error getting OTP attempts: ${error.message}`);
     }
   }
 
@@ -369,7 +364,7 @@ export class MongoStorage {
       }
 
       const otpDoc = await this.OTP.findOne(query).sort({ createdAt: -1 });
-      
+
       if (!otpDoc) {
         return {
           exists: false,
@@ -380,7 +375,7 @@ export class MongoStorage {
 
       const now = new Date();
       const isExpired = otpDoc.expiresAt < now;
-      
+
       let actualStatus = otpDoc.status;
       if (actualStatus === "pending" && isExpired) {
         actualStatus = "expired";
@@ -390,8 +385,8 @@ export class MongoStorage {
         exists: true,
         id: otpDoc.id,
         email: otpDoc.email,
-        originalOtp: actualStatus === "consumed" || actualStatus === "revoked" 
-          ? this.fullyMaskOTP(otpDoc.originalOtp) 
+        originalOtp: actualStatus === "consumed" || actualStatus === "revoked"
+          ? this.fullyMaskOTP(otpDoc.originalOtp)
           : this.maskOTP(otpDoc.originalOtp),
         maskedOtp: otpDoc.maskedOtp,
         type: otpDoc.type,
@@ -403,30 +398,24 @@ export class MongoStorage {
         consumedAt: otpDoc.consumedAt,
         canBeUsed: actualStatus === "pending" && !isExpired
       };
-      
+
     } catch (error) {
-      console.error(`Error getting OTP status for ${email}:`, error.message);
-      throw error;
+      throw new Error(`Error getting OTP status: ${error.message}`);
     }
   }
 
   async cleanupExpiredOTPs() {
     try {
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      
+
       const deleteResult = await this.OTP.deleteMany({
         createdAt: { $lt: thirtyDaysAgo }
       });
-      
-      if (deleteResult.deletedCount > 0) {
-        console.log(`Cleaned up ${deleteResult.deletedCount} expired OTPs`);
-      }
-      
+
       return deleteResult.deletedCount;
-      
+
     } catch (error) {
-      console.error("Error cleaning up OTPs:", error.message);
-      throw error;
+      throw new Error(`Error cleaning up OTPs: ${error.message}`);
     }
   }
 
@@ -437,8 +426,7 @@ export class MongoStorage {
       const user = await this.User.findOne({ email: email.trim().toLowerCase() });
       return user ? user.toObject() : undefined;
     } catch (error) {
-      console.error(`Error finding user by email ${email}:`, error.message);
-      throw error;
+      throw new Error(`Error finding user by email: ${error.message}`);
     }
   }
 
@@ -450,8 +438,7 @@ export class MongoStorage {
       }
       return user ? user.toObject() : undefined;
     } catch (error) {
-      console.error(`Error getting user ${id}:`, error.message);
-      throw error;
+      throw new Error(`Error getting user: ${error.message}`);
     }
   }
 
@@ -460,15 +447,12 @@ export class MongoStorage {
       const user = await this.User.findOne({ username });
       return user ? user.toObject() : undefined;
     } catch (error) {
-      console.error(`Error finding user by username ${username}:`, error.message);
-      throw error;
+      throw new Error(`Error finding user by username: ${error.message}`);
     }
   }
 
   async createUser(userData) {
     try {
-      console.log(`Creating user: ${userData.email}`);
-      
       const saltRounds = 10;
       const hashedPassword = await bcrypt.hash(userData.password, saltRounds);
 
@@ -481,8 +465,7 @@ export class MongoStorage {
       await newUser.save();
       return newUser.toObject();
     } catch (error) {
-      console.error(`Error creating user ${userData.email}:`, error.message);
-      throw error;
+      throw new Error(`Error creating user: ${error.message}`);
     }
   }
 
@@ -501,11 +484,9 @@ export class MongoStorage {
       user.updatedAt = new Date();
 
       const result = await user.save();
-      console.log(`Password updated for user: ${user.email}`);
       return result.toObject();
     } catch (error) {
-      console.error(`Error updating password for user ${userId}:`, error.message);
-      throw error;
+      throw new Error(`Error updating user password: ${error.message}`);
     }
   }
 
@@ -521,19 +502,16 @@ export class MongoStorage {
       );
       return result ? result.toObject() : undefined;
     } catch (error) {
-      console.error(`Error updating user ${id}:`, error.message);
-      throw error;
+      throw new Error(`Error updating user: ${error.message}`);
     }
   }
 
   async deleteUser(id) {
     try {
       const result = await this.User.deleteOne({ id });
-      console.log(`User ${id} deleted: ${result.deletedCount > 0 ? "success" : "not found"}`);
       return result.deletedCount > 0;
     } catch (error) {
-      console.error(`Error deleting user ${id}:`, error.message);
-      throw error;
+      throw new Error(`Error deleting user: ${error.message}`);
     }
   }
 
@@ -542,8 +520,7 @@ export class MongoStorage {
       const users = await this.User.find();
       return users.map(user => user.toObject());
     } catch (error) {
-      console.error("Error getting all users:", error.message);
-      throw error;
+      throw new Error(`Error getting all users: ${error.message}`);
     }
   }
 
@@ -559,8 +536,7 @@ export class MongoStorage {
       );
       return result ? result.toObject() : undefined;
     } catch (error) {
-      console.error(`Error updating last login for user ${userId}:`, error.message);
-      throw error;
+      throw new Error(`Error updating user last login: ${error.message}`);
     }
   }
 
@@ -588,8 +564,7 @@ export class MongoStorage {
 
       return undefined;
     } catch (error) {
-      console.error(`Error getting business ${identifier}:`, error.message);
-      throw error;
+      throw new Error(`Error getting business: ${error.message}`);
     }
   }
 
@@ -607,15 +582,12 @@ export class MongoStorage {
 
       return highestBusiness.businessId + 1;
     } catch (error) {
-      console.error("Error generating business ID:", error.message);
-      throw error;
+      throw new Error(`Error generating business ID: ${error.message}`);
     }
   }
 
   async createBusiness(businessData) {
     try {
-      console.log(`Creating business: ${businessData.businessName}`);
-      
       const businessId = await this.generateBusinessId();
 
       const newBusiness = new this.Business({
@@ -627,8 +599,7 @@ export class MongoStorage {
       await newBusiness.save();
       return newBusiness.toObject();
     } catch (error) {
-      console.error(`Error creating business ${businessData.businessName}:`, error.message);
-      throw error;
+      throw new Error(`Error creating business: ${error.message}`);
     }
   }
 
@@ -637,8 +608,7 @@ export class MongoStorage {
       const business = await this.Business.findOne({ registrationNumber: regNumber });
       return business ? business.toObject() : undefined;
     } catch (error) {
-      console.error(`Error getting business by reg number ${regNumber}:`, error.message);
-      throw error;
+      throw new Error(`Error getting business by registration number: ${error.message}`);
     }
   }
 
@@ -647,8 +617,7 @@ export class MongoStorage {
       const business = await this.Business.findOne({ businessName: name });
       return business ? business.toObject() : undefined;
     } catch (error) {
-      console.error(`Error getting business by name ${name}:`, error.message);
-      throw error;
+      throw new Error(`Error getting business by name: ${error.message}`);
     }
   }
 
@@ -657,8 +626,7 @@ export class MongoStorage {
       const businesses = await this.Business.find().sort({ businessId: 1 });
       return businesses.map(business => business.toObject());
     } catch (error) {
-      console.error("Error getting businesses:", error.message);
-      throw error;
+      throw new Error(`Error getting businesses: ${error.message}`);
     }
   }
 
@@ -676,19 +644,16 @@ export class MongoStorage {
       );
       return result ? result.toObject() : undefined;
     } catch (error) {
-      console.error(`Error updating business ${id}:`, error.message);
-      throw error;
+      throw new Error(`Error updating business: ${error.message}`);
     }
   }
 
   async deleteBusiness(id) {
     try {
       const result = await this.Business.deleteOne({ id });
-      console.log(`Business ${id} deleted: ${result.deletedCount > 0 ? "success" : "not found"}`);
       return result.deletedCount > 0;
     } catch (error) {
-      console.error(`Error deleting business ${id}:`, error.message);
-      throw error;
+      throw new Error(`Error deleting business: ${error.message}`);
     }
   }
 
@@ -697,8 +662,7 @@ export class MongoStorage {
       const users = await this.User.find({ associatedBusinessId: businessId.toString() });
       return users.map(user => user.toObject());
     } catch (error) {
-      console.error(`Error getting users for business ${businessId}:`, error.message);
-      throw error;
+      throw new Error(`Error getting business users: ${error.message}`);
     }
   }
 
@@ -712,8 +676,7 @@ export class MongoStorage {
       const business = await this.Business.findOne({ businessId: numericId });
       return business ? business.toObject() : undefined;
     } catch (error) {
-      console.error(`Error getting business by businessId ${businessId}:`, error.message);
-      throw error;
+      throw new Error(`Error getting business by business ID: ${error.message}`);
     }
   }
 
@@ -733,8 +696,7 @@ export class MongoStorage {
 
       return undefined;
     } catch (error) {
-      console.error(`Error getting business by identifier ${identifier}:`, error.message);
-      throw error;
+      throw new Error(`Error getting business by identifier: ${error.message}`);
     }
   }
 }
