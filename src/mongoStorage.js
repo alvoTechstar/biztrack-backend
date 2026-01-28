@@ -141,6 +141,7 @@ export class MongoStorage {
   async initialize() {
     await this.createDefaultSetup();
     await this.cleanupExpiredOTPs();
+    console.log("MongoStorage initialized");
   }
 
   async createDefaultSetup() {
@@ -170,6 +171,7 @@ export class MongoStorage {
 
         await defaultBusiness.save();
         business = defaultBusiness;
+        console.log("Default business created");
       }
 
       const existingAdmin = await this.User.findOne({ email: "admin@biztrack.com" });
@@ -196,10 +198,12 @@ export class MongoStorage {
         });
 
         await defaultAdmin.save();
+        console.log("Default admin user created");
       }
 
     } catch (error) {
-      throw new Error(`Error creating default setup: ${error.message}`);
+      console.error("Error creating default setup:", error.message);
+      throw error;
     }
   }
 
@@ -216,8 +220,11 @@ export class MongoStorage {
 
   async createOTP(email, otp, type, userId = null, metadata = {}) {
     try {
+      console.log(`OTP created for ${email}: ${this.maskOTP(otp)} (type: ${type})`);
+      
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
       
+      // Revoke previous pending OTPs
       await this.OTP.updateMany(
         { 
           email, 
@@ -226,8 +233,7 @@ export class MongoStorage {
         },
         { 
           status: "revoked",
-          updatedAt: new Date(),
-          $set: { reason: "superseded_by_new_otp" }
+          updatedAt: new Date()
         }
       );
 
@@ -253,7 +259,8 @@ export class MongoStorage {
       };
       
     } catch (error) {
-      throw new Error(`Error creating OTP: ${error.message}`);
+      console.error(`Error creating OTP for ${email}:`, error.message);
+      throw error;
     }
   }
 
@@ -274,6 +281,7 @@ export class MongoStorage {
       const foundOTP = await this.OTP.findOne(query).sort({ createdAt: -1 });
       
       if (foundOTP) {
+        console.log(`OTP verified for ${email}: ${this.maskOTP(otp)}`);
         foundOTP.attempts += 1;
         
         if (metadata.ipAddress) {
@@ -287,9 +295,11 @@ export class MongoStorage {
         return foundOTP;
       }
       
+      console.log(`Invalid OTP attempt for ${email}: ${this.maskOTP(otp)}`);
       return null;
     } catch (error) {
-      throw new Error(`Error finding OTP: ${error.message}`);
+      console.error(`Error verifying OTP for ${email}:`, error.message);
+      throw error;
     }
   }
 
@@ -316,10 +326,16 @@ export class MongoStorage {
       };
 
       const result = await this.OTP.updateMany(query, updateData);
+      
+      if (result.modifiedCount > 0) {
+        console.log(`OTP consumed for ${email}`);
+      }
+      
       return result.modifiedCount > 0;
       
     } catch (error) {
-      throw new Error(`Error consuming OTP: ${error.message}`);
+      console.error(`Error consuming OTP for ${email}:`, error.message);
+      throw error;
     }
   }
 
@@ -340,7 +356,8 @@ export class MongoStorage {
       
       return count;
     } catch (error) {
-      throw new Error(`Error getting OTP attempts: ${error.message}`);
+      console.error(`Error getting OTP attempts for ${email}:`, error.message);
+      throw error;
     }
   }
 
@@ -388,7 +405,8 @@ export class MongoStorage {
       };
       
     } catch (error) {
-      throw new Error(`Error getting OTP status: ${error.message}`);
+      console.error(`Error getting OTP status for ${email}:`, error.message);
+      throw error;
     }
   }
 
@@ -400,10 +418,15 @@ export class MongoStorage {
         createdAt: { $lt: thirtyDaysAgo }
       });
       
+      if (deleteResult.deletedCount > 0) {
+        console.log(`Cleaned up ${deleteResult.deletedCount} expired OTPs`);
+      }
+      
       return deleteResult.deletedCount;
       
     } catch (error) {
-      throw new Error(`Error cleaning up OTPs: ${error.message}`);
+      console.error("Error cleaning up OTPs:", error.message);
+      throw error;
     }
   }
 
@@ -414,7 +437,8 @@ export class MongoStorage {
       const user = await this.User.findOne({ email: email.trim().toLowerCase() });
       return user ? user.toObject() : undefined;
     } catch (error) {
-      throw new Error(`Error finding user by email: ${error.message}`);
+      console.error(`Error finding user by email ${email}:`, error.message);
+      throw error;
     }
   }
 
@@ -426,7 +450,8 @@ export class MongoStorage {
       }
       return user ? user.toObject() : undefined;
     } catch (error) {
-      throw new Error(`Error getting user: ${error.message}`);
+      console.error(`Error getting user ${id}:`, error.message);
+      throw error;
     }
   }
 
@@ -435,12 +460,15 @@ export class MongoStorage {
       const user = await this.User.findOne({ username });
       return user ? user.toObject() : undefined;
     } catch (error) {
-      throw new Error(`Error finding user by username: ${error.message}`);
+      console.error(`Error finding user by username ${username}:`, error.message);
+      throw error;
     }
   }
 
   async createUser(userData) {
     try {
+      console.log(`Creating user: ${userData.email}`);
+      
       const saltRounds = 10;
       const hashedPassword = await bcrypt.hash(userData.password, saltRounds);
 
@@ -453,7 +481,8 @@ export class MongoStorage {
       await newUser.save();
       return newUser.toObject();
     } catch (error) {
-      throw new Error(`Error creating user: ${error.message}`);
+      console.error(`Error creating user ${userData.email}:`, error.message);
+      throw error;
     }
   }
 
@@ -472,9 +501,11 @@ export class MongoStorage {
       user.updatedAt = new Date();
 
       const result = await user.save();
+      console.log(`Password updated for user: ${user.email}`);
       return result.toObject();
     } catch (error) {
-      throw new Error(`Error updating user password: ${error.message}`);
+      console.error(`Error updating password for user ${userId}:`, error.message);
+      throw error;
     }
   }
 
@@ -490,16 +521,19 @@ export class MongoStorage {
       );
       return result ? result.toObject() : undefined;
     } catch (error) {
-      throw new Error(`Error updating user: ${error.message}`);
+      console.error(`Error updating user ${id}:`, error.message);
+      throw error;
     }
   }
 
   async deleteUser(id) {
     try {
       const result = await this.User.deleteOne({ id });
+      console.log(`User ${id} deleted: ${result.deletedCount > 0 ? "success" : "not found"}`);
       return result.deletedCount > 0;
     } catch (error) {
-      throw new Error(`Error deleting user: ${error.message}`);
+      console.error(`Error deleting user ${id}:`, error.message);
+      throw error;
     }
   }
 
@@ -508,7 +542,8 @@ export class MongoStorage {
       const users = await this.User.find();
       return users.map(user => user.toObject());
     } catch (error) {
-      throw new Error(`Error getting all users: ${error.message}`);
+      console.error("Error getting all users:", error.message);
+      throw error;
     }
   }
 
@@ -524,7 +559,8 @@ export class MongoStorage {
       );
       return result ? result.toObject() : undefined;
     } catch (error) {
-      throw new Error(`Error updating user last login: ${error.message}`);
+      console.error(`Error updating last login for user ${userId}:`, error.message);
+      throw error;
     }
   }
 
@@ -552,7 +588,8 @@ export class MongoStorage {
 
       return undefined;
     } catch (error) {
-      throw new Error(`Error getting business: ${error.message}`);
+      console.error(`Error getting business ${identifier}:`, error.message);
+      throw error;
     }
   }
 
@@ -570,12 +607,15 @@ export class MongoStorage {
 
       return highestBusiness.businessId + 1;
     } catch (error) {
-      throw new Error(`Error generating business ID: ${error.message}`);
+      console.error("Error generating business ID:", error.message);
+      throw error;
     }
   }
 
   async createBusiness(businessData) {
     try {
+      console.log(`Creating business: ${businessData.businessName}`);
+      
       const businessId = await this.generateBusinessId();
 
       const newBusiness = new this.Business({
@@ -587,7 +627,8 @@ export class MongoStorage {
       await newBusiness.save();
       return newBusiness.toObject();
     } catch (error) {
-      throw new Error(`Error creating business: ${error.message}`);
+      console.error(`Error creating business ${businessData.businessName}:`, error.message);
+      throw error;
     }
   }
 
@@ -596,7 +637,8 @@ export class MongoStorage {
       const business = await this.Business.findOne({ registrationNumber: regNumber });
       return business ? business.toObject() : undefined;
     } catch (error) {
-      throw new Error(`Error getting business by registration number: ${error.message}`);
+      console.error(`Error getting business by reg number ${regNumber}:`, error.message);
+      throw error;
     }
   }
 
@@ -605,7 +647,8 @@ export class MongoStorage {
       const business = await this.Business.findOne({ businessName: name });
       return business ? business.toObject() : undefined;
     } catch (error) {
-      throw new Error(`Error getting business by name: ${error.message}`);
+      console.error(`Error getting business by name ${name}:`, error.message);
+      throw error;
     }
   }
 
@@ -614,7 +657,8 @@ export class MongoStorage {
       const businesses = await this.Business.find().sort({ businessId: 1 });
       return businesses.map(business => business.toObject());
     } catch (error) {
-      throw new Error(`Error getting businesses: ${error.message}`);
+      console.error("Error getting businesses:", error.message);
+      throw error;
     }
   }
 
@@ -632,16 +676,19 @@ export class MongoStorage {
       );
       return result ? result.toObject() : undefined;
     } catch (error) {
-      throw new Error(`Error updating business: ${error.message}`);
+      console.error(`Error updating business ${id}:`, error.message);
+      throw error;
     }
   }
 
   async deleteBusiness(id) {
     try {
       const result = await this.Business.deleteOne({ id });
+      console.log(`Business ${id} deleted: ${result.deletedCount > 0 ? "success" : "not found"}`);
       return result.deletedCount > 0;
     } catch (error) {
-      throw new Error(`Error deleting business: ${error.message}`);
+      console.error(`Error deleting business ${id}:`, error.message);
+      throw error;
     }
   }
 
@@ -650,7 +697,8 @@ export class MongoStorage {
       const users = await this.User.find({ associatedBusinessId: businessId.toString() });
       return users.map(user => user.toObject());
     } catch (error) {
-      throw new Error(`Error getting business users: ${error.message}`);
+      console.error(`Error getting users for business ${businessId}:`, error.message);
+      throw error;
     }
   }
 
@@ -664,7 +712,8 @@ export class MongoStorage {
       const business = await this.Business.findOne({ businessId: numericId });
       return business ? business.toObject() : undefined;
     } catch (error) {
-      throw new Error(`Error getting business by business ID: ${error.message}`);
+      console.error(`Error getting business by businessId ${businessId}:`, error.message);
+      throw error;
     }
   }
 
@@ -684,7 +733,8 @@ export class MongoStorage {
 
       return undefined;
     } catch (error) {
-      throw new Error(`Error getting business by identifier: ${error.message}`);
+      console.error(`Error getting business by identifier ${identifier}:`, error.message);
+      throw error;
     }
   }
 }
