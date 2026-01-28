@@ -2,8 +2,6 @@
 import express from 'express';
 import {
   createProduct,
-  getProductsByLocation,
-  getProductsByKiosk,
   getProductsByBusiness,
   updateProduct,
   deleteProduct,
@@ -12,6 +10,7 @@ import {
 import { authenticateToken } from '../../middleware/authMiddleware.js';
 
 const router = express.Router();
+
 // Create product
 router.route('/')
   .post(authenticateToken, createProduct);
@@ -19,14 +18,6 @@ router.route('/')
 // Business products endpoint - MUST come before :id
 router.route('/business/:businessId')
   .get(authenticateToken, getProductsByBusiness);
-
-// Kiosk products endpoint
-router.route('/kiosk/:kioskId')
-  .get(authenticateToken, getProductsByKiosk);
-
-// Generic location endpoint
-router.route('/:locationType/:locationId')
-  .get(authenticateToken, getProductsByLocation);
 
 // Stock update endpoint - MUST come before :id
 router.route('/:id/stock')

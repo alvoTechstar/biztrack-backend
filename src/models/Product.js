@@ -54,13 +54,10 @@ const productSchema = new mongoose.Schema({
     default: ''
   },
   
-  // Location reference
-  kioskId: {
-    type: String, // Can be UUID string
-    ref: 'Kiosk'
-  },
+  // ✅ SIMPLIFIED: Use ONLY businessId for ALL locations
   businessId: {
-    type: Number, // Business ID is a number
+    type: Number, // Always use number
+    required: true,
     ref: 'Business'
   },
   businessUUID: {
@@ -68,9 +65,11 @@ const productSchema = new mongoose.Schema({
     trim: true
   },
   
+  // ✅ REMOVED: kioskId field - Everything uses businessId
+  
   // createdBy should be String for UUID
   createdBy: {
-    type: String, // CHANGED FROM ObjectId TO String
+    type: String,
     required: true,
     ref: 'User'
   }
@@ -78,30 +77,12 @@ const productSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound index for SKU uniqueness per location
-productSchema.index({ sku: 1, kioskId: 1 }, { 
-  unique: true, 
-  sparse: true, 
-  partialFilterExpression: { kioskId: { $exists: true, $type: 'string' } } 
-});
-
+// ✅ SIMPLIFIED: Only one index needed
 productSchema.index({ sku: 1, businessId: 1 }, { 
-  unique: true, 
-  sparse: true, 
-  partialFilterExpression: { businessId: { $exists: true, $type: 'number' } } 
+  unique: true 
 });
 
-// Validate that either kioskId or businessId is provided
-productSchema.pre('validate', function(next) {
-  if (!this.kioskId && !this.businessId) {
-    this.invalidate('location', 'Either kioskId or businessId must be provided');
-  }
-  if (this.kioskId && this.businessId) {
-    this.invalidate('location', 'Only one of kioskId or businessId can be provided');
-  }
-  next();
-});
-
+// ✅ REMOVED: kioskId validation
 // Auto-calculate status before save
 productSchema.pre('save', function(next) {
   if (this.stock === 0) {
@@ -115,5 +96,4 @@ productSchema.pre('save', function(next) {
 });
 
 const Product = mongoose.model('Product', productSchema);
-
 export default Product;

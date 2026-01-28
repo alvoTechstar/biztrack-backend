@@ -1,8 +1,5 @@
 import Product from '../models/Product.js';
 
-// @desc    Create a new product
-// @route   POST /api/products
-// @access  Private
 const createProduct = async (req, res) => {
   try {
     const {
@@ -14,38 +11,24 @@ const createProduct = async (req, res) => {
       buyingPrice,
       price,
       threshold = 0,
-      kioskId,
       businessId,
       businessUUID
     } = req.body;
 
-    console.log('📝 Creating product with data:', {
-      name,
-      sku,
-      category,
-      stock,
-      unit,
-      buyingPrice,
-      price,
-      threshold,
-      kioskId,
-      businessId,
-      businessUUID,
-      createdBy: req.user?.id
-    });
+    console.log('📝 Creating product for business:', businessId);
+    console.log('📝 Product SKU:', sku);
 
     // Normalize SKU
     const normalizedSku = sku.trim().toUpperCase();
 
-    // Determine the ID to use
-    let locationId = kioskId || businessId;
-    let locationType = kioskId ? 'kioskId' : 'businessId';
+    // Convert businessId to Number
+    const businessIdNumber = parseInt(businessId);
 
     // Validate required fields
-    if (!name || !sku || !category || !unit || !buyingPrice || !price || !locationId) {
+    if (!name || !sku || !category || !unit || !buyingPrice || !price || !businessIdNumber) {
       return res.status(400).json({
         success: false,
-        message: `All required fields must be provided: name, sku, category, unit, buyingPrice, price, ${locationType}`
+        message: 'All required fields must be provided: name, sku, category, unit, buyingPrice, price, businessId'
       });
     }
 
@@ -68,52 +51,39 @@ const createProduct = async (req, res) => {
     // ✅ CHECK IF req.user.id EXISTS
     if (!req.user || !req.user.id) {
       console.error('❌ CRITICAL ERROR: req.user.id is undefined');
-      console.error('   - req.user:', req.user);
-      console.error('   - req.user?.id:', req.user?.id);
       return res.status(401).json({
         success: false,
         message: 'Authentication failed: User ID not found in token'
       });
     }
 
-    // ✅ CRITICAL: Create query based on location type
-    let skuCheckQuery = {};
+    // ✅ STEP 1: First get ALL products for this business
+    console.log('🔍 Getting all products for business:', businessIdNumber);
+    const businessProducts = await Product.find({ businessId: businessIdNumber });
+    console.log(`📊 Found ${businessProducts.length} products in business ${businessIdNumber}`);
 
-    if (kioskId) {
-      // Check SKU within same kiosk only
-      skuCheckQuery = {
-        sku: normalizedSku,
-        kioskId: kioskId // Match exact kiosk
-      };
-    } else if (businessId) {
-      // Check SKU within same business only
-      skuCheckQuery = {
-        sku: normalizedSku,
-        businessId: parseInt(businessId) // Match exact business ID
-      };
-    }
-
-    console.log('🔍 SKU Check Query:', skuCheckQuery);
-
-    // ✅ Check for existing SKU ONLY in the same location
-    const existingProduct = await Product.findOne(skuCheckQuery);
+    // ✅ STEP 2: Check if SKU already exists in THIS business only
+    const existingProduct = businessProducts.find(
+      product => product.sku.toUpperCase() === normalizedSku
+    );
 
     if (existingProduct) {
-      console.log('❌ SKU already exists in this location:', existingProduct);
-      const locationName = existingProduct.kioskId ? 'kiosk' : 'business';
+      console.log('❌ SKU already exists in THIS business:', {
+        existingProductName: existingProduct.name,
+        existingSKU: existingProduct.sku,
+        businessId: existingProduct.businessId
+      });
+
       return res.status(400).json({
         success: false,
-        message: `SKU "${normalizedSku}" already exists in this ${locationName}.`,
+        message: `SKU "${normalizedSku}" already exists in your business.`,
         details: {
-          existingProduct: {
-            name: existingProduct.name,
-            sku: existingProduct.sku,
-            locationId: existingProduct.kioskId || existingProduct.businessId,
-            locationType: existingProduct.kioskId ? 'kiosk' : 'business'
-          }
+          existingProductName: existingProduct.name
         }
       });
     }
+
+    console.log('✅ SKU is unique in business', businessIdNumber);
 
     // Create product data
     const productData = {
@@ -125,29 +95,20 @@ const createProduct = async (req, res) => {
       buyingPrice: parseFloat(buyingPrice),
       price: parseFloat(price),
       threshold: parseInt(threshold) || 0,
-      createdBy: req.user.id, // This is a UUID string
-      businessUUID: businessUUID || null
+      businessId: businessIdNumber,
+      businessUUID: businessUUID || null,
+      createdBy: req.user.id
     };
 
-    // Set the appropriate ID field
-    if (kioskId) {
-      productData.kioskId = kioskId;
-      // Clear business fields for kiosk products
-      delete productData.businessId;
-      delete productData.businessUUID;
-    } else {
-      // For business products, ensure businessId is number
-      productData.businessId = parseInt(businessId);
-      // Clear kiosk field
-      delete productData.kioskId;
-    }
-
-    console.log('📦 Final Product Data:', productData);
+    console.log('📦 Creating product with data:', {
+      ...productData,
+      businessIdType: typeof productData.businessId
+    });
 
     // Create product
     const product = await Product.create(productData);
 
-    console.log('✅ Product created successfully:', product);
+    console.log('✅ Product created successfully for business', businessIdNumber);
 
     res.status(201).json({
       success: true,
@@ -157,12 +118,19 @@ const createProduct = async (req, res) => {
   } catch (error) {
     console.error('❌ Create product error:', error);
 
+    // ✅ Handle MongoDB duplicate key error
     if (error.code === 11000) {
-      // MongoDB duplicate key error - should be caught by our manual check above
+      console.error('MongoDB duplicate key error:', error.keyValue);
+
+      // This happens when the unique index {sku: 1, businessId: 1} is violated
+      // Which means SKU already exists in this business
       return res.status(400).json({
         success: false,
-        message: 'Duplicate SKU detected. SKU must be unique within the same location.',
-        error: error.keyValue
+        message: `SKU "${error.keyValue.sku}" already exists in this business.`,
+        details: {
+          duplicateSKU: error.keyValue.sku,
+          businessId: error.keyValue.businessId
+        }
       });
     }
 
@@ -183,85 +151,6 @@ const createProduct = async (req, res) => {
   }
 };
 
-// @desc    Get all products for a kiosk or business
-// @route   GET /api/products/:locationType/:locationId
-// @access  Private
-const getProductsByLocation = async (req, res) => {
-  try {
-    const { locationType, locationId } = req.params;
-
-    if (!locationId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Location ID is required'
-      });
-    }
-
-    // Build query based on location type
-    let query = {};
-    if (locationType === 'kiosk') {
-      query.kioskId = locationId;
-    } else if (locationType === 'business') {
-      query.businessId = parseInt(locationId) || locationId;
-    } else {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid location type. Use "kiosk" or "business"'
-      });
-    }
-
-    const products = await Product.find(query)
-      .sort({ createdAt: -1 })
-      .populate('createdBy', 'firstName lastName email');
-
-    res.status(200).json({
-      success: true,
-      message: 'Products retrieved successfully',
-      products,
-      count: products.length
-    });
-  } catch (error) {
-    console.error('Get products error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error retrieving products'
-    });
-  }
-};
-
-// @desc    Get all products by kiosk (for backward compatibility)
-// @route   GET /api/products/kiosk/:kioskId
-// @access  Private
-const getProductsByKiosk = async (req, res) => {
-  try {
-    const { kioskId } = req.params;
-
-    if (!kioskId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Kiosk ID is required'
-      });
-    }
-
-    const products = await Product.find({ kioskId })
-      .sort({ createdAt: -1 })
-      .populate('createdBy', 'firstName lastName email');
-
-    res.status(200).json({
-      success: true,
-      message: 'Products retrieved successfully',
-      products,
-      count: products.length
-    });
-  } catch (error) {
-    console.error('Get products by kiosk error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error retrieving products'
-    });
-  }
-};
-
 // @desc    Get all products by business
 // @route   GET /api/products/business/:businessId
 // @access  Private
@@ -276,18 +165,22 @@ const getProductsByBusiness = async (req, res) => {
       });
     }
 
-    // Try to parse as number first, otherwise use as string
+    // Parse as number
     const businessIdNum = parseInt(businessId);
-    const query = isNaN(businessIdNum) ? { businessId: businessId } : { businessId: businessIdNum };
 
-    console.log('Query for products:', query);
+    if (isNaN(businessIdNum)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Business ID must be a number'
+      });
+    }
 
-    // TEMPORARY FIX: Remove populate to avoid ObjectId casting error
-    const products = await Product.find(query)
+    console.log('Query for products in business:', businessIdNum);
+
+    const products = await Product.find({ businessId: businessIdNum })
       .sort({ createdAt: -1 });
-    // .populate('createdBy', 'firstName lastName email'); // Comment this out
 
-    console.log(`Found ${products.length} products`);
+    console.log(`Found ${products.length} products in business ${businessIdNum}`);
 
     res.status(200).json({
       success: true,
@@ -297,26 +190,20 @@ const getProductsByBusiness = async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Get products by business error:', error);
-    console.error('Error stack:', error.stack);
-
-    // More detailed error information
     res.status(500).json({
       success: false,
       message: 'Server error retrieving products',
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
-// @desc    Update a product
-// @route   PUT /api/products/:id
-// @access  Private
+
 const updateProduct = async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = { ...req.body };
 
-    console.log('📝 Updating product:', id, 'with data:', updateData);
+    console.log('📝 Updating product:', id);
 
     const existingProduct = await Product.findById(id);
 
@@ -330,6 +217,36 @@ const updateProduct = async (req, res) => {
     // Normalize SKU if being updated
     if (updateData.sku) {
       updateData.sku = updateData.sku.trim().toUpperCase();
+
+      // ✅ Check for duplicate SKU ONLY in the SAME business
+      if (updateData.sku !== existingProduct.sku) {
+        console.log('🔍 Checking SKU in business:', existingProduct.businessId);
+
+        // Get all products in this business
+        const businessProducts = await Product.find({
+          businessId: existingProduct.businessId
+        });
+
+        // Check if SKU already exists
+        const duplicateProduct = businessProducts.find(
+          product => product.sku.toUpperCase() === updateData.sku &&
+            product._id.toString() !== id
+        );
+
+        if (duplicateProduct) {
+          console.log('❌ SKU already exists in this business:', {
+            duplicateProductName: duplicateProduct.name
+          });
+
+          return res.status(400).json({
+            success: false,
+            message: `SKU "${updateData.sku}" already exists in your business.`,
+            details: {
+              existingProductName: duplicateProduct.name
+            }
+          });
+        }
+      }
     }
 
     // Update status based on stock
@@ -359,44 +276,13 @@ const updateProduct = async (req, res) => {
       }
     }
 
-    // ✅ CRITICAL: Check for duplicate SKU only within the same location
-    if (updateData.sku && updateData.sku !== existingProduct.sku) {
-      let skuCheckQuery = {
-        sku: updateData.sku,
-        _id: { $ne: id } // Exclude current product
-      };
-
-      // Check within same location only
-      if (existingProduct.kioskId) {
-        skuCheckQuery.kioskId = existingProduct.kioskId;
-      } else if (existingProduct.businessId) {
-        skuCheckQuery.businessId = existingProduct.businessId;
-      }
-
-      const duplicateProduct = await Product.findOne(skuCheckQuery);
-
-      if (duplicateProduct) {
-        const locationType = existingProduct.kioskId ? 'kiosk' : 'business';
-        return res.status(400).json({
-          success: false,
-          message: `SKU "${updateData.sku}" already exists in this ${locationType}`,
-          details: {
-            existingProduct: {
-              name: duplicateProduct.name,
-              sku: duplicateProduct.sku
-            }
-          }
-        });
-      }
-    }
-
     const product = await Product.findByIdAndUpdate(
       id,
       updateData,
       { new: true, runValidators: true }
     );
 
-    console.log('✅ Product updated successfully:', product);
+    console.log('✅ Product updated successfully');
 
     res.status(200).json({
       success: true,
@@ -416,17 +302,17 @@ const updateProduct = async (req, res) => {
     }
 
     if (error.code === 11000) {
+      console.error('MongoDB duplicate key error:', error.keyValue);
       return res.status(400).json({
         success: false,
-        message: 'SKU already exists in this location',
+        message: `SKU "${error.keyValue.sku}" already exists in this business.`,
         error: error.keyValue
       });
     }
 
     res.status(500).json({
       success: false,
-      message: 'Server error updating product',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error updating product'
     });
   }
 };
@@ -449,7 +335,12 @@ const deleteProduct = async (req, res) => {
       });
     }
 
-    console.log('✅ Product deleted successfully:', product);
+    console.log('✅ Product deleted successfully:', {
+      _id: product._id,
+      name: product.name,
+      sku: product.sku,
+      businessId: product.businessId
+    });
 
     res.status(200).json({
       success: true,
@@ -505,7 +396,14 @@ const updateProductStock = async (req, res) => {
       { new: true, runValidators: true }
     );
 
-    console.log('✅ Stock updated successfully:', product);
+    console.log('✅ Stock updated successfully:', {
+      _id: product._id,
+      name: product.name,
+      sku: product.sku,
+      businessId: product.businessId,
+      stock: product.stock,
+      status: product.status
+    });
 
     res.status(200).json({
       success: true,
@@ -531,10 +429,11 @@ const updateProductStock = async (req, res) => {
   }
 };
 
+// ✅ REMOVED: getProductsByLocation and getProductsByKiosk
+// Use only getProductsByBusiness for all locations
+
 export {
   createProduct,
-  getProductsByLocation,
-  getProductsByKiosk,
   getProductsByBusiness,
   updateProduct,
   deleteProduct,
