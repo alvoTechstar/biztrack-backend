@@ -144,6 +144,43 @@ export default function AuthRoutes(storage) {
         }
     };
 
+    // ==================== HELPER: CHECK BUSINESS STATUS ====================
+    const checkBusinessStatus = async (businessId) => {
+        if (!businessId) {
+            return { 
+                isActive: true, 
+                message: 'No business associated' 
+            };
+        }
+
+        try {
+            const business = await storage.getBusiness(businessId);
+            
+            if (!business) {
+                return { 
+                    isActive: false, 
+                    message: 'Business not found' 
+                };
+            }
+
+            const businessStatus = business.status ? business.status.toLowerCase() : 'active';
+            const isActive = !['inactive', 'disabled', 'suspended'].includes(businessStatus);
+            
+            return {
+                isActive,
+                businessStatus,
+                businessName: business.businessName,
+                business
+            };
+        } catch (error) {
+            console.error('Error checking business status:', error);
+            return { 
+                isActive: false, 
+                message: 'Error checking business status' 
+            };
+        }
+    };
+
     // ==================== LOGIN ENDPOINT ====================
     router.post("/login", async (req, res) => {
         try {
@@ -168,6 +205,19 @@ export default function AuthRoutes(storage) {
                 return res.status(403).json({
                     success: false,
                     message: "Your account is not active. Please contact administrator."
+                });
+            }
+
+            // Check user's business status BEFORE allowing login
+            const businessId = user.associatedBusinessId || user.institutionId;
+            const businessStatusCheck = await checkBusinessStatus(businessId);
+            
+            if (!businessStatusCheck.isActive) {
+                return res.status(403).json({
+                    success: false,
+                    message: `Your business "${businessStatusCheck.businessName || 'account'}" has been ${businessStatusCheck.businessStatus}. Please contact your administrator.`,
+                    businessStatus: businessStatusCheck.businessStatus,
+                    code: "BUSINESS_DISABLED"
                 });
             }
 
@@ -300,7 +350,20 @@ export default function AuthRoutes(storage) {
             // Get user
             const user = await storage.getUserByEmail(email);
             const businessId = user.associatedBusinessId || user.institutionId;
-            const business = await storage.getBusiness(businessId);
+            
+            // Check business status AGAIN before issuing token
+            const businessStatusCheck = await checkBusinessStatus(businessId);
+            
+            if (!businessStatusCheck.isActive) {
+                return res.status(403).json({
+                    success: false,
+                    message: `Your business "${businessStatusCheck.businessName || 'account'}" has been ${businessStatusCheck.businessStatus}. Please contact your administrator.`,
+                    businessStatus: businessStatusCheck.businessStatus,
+                    code: "BUSINESS_DISABLED"
+                });
+            }
+
+            const business = businessStatusCheck.business || await storage.getBusiness(businessId);
             
             if (!business) {
                 return res.status(404).json({
@@ -324,7 +387,8 @@ export default function AuthRoutes(storage) {
                 businessName: business.businessName,
                 businessType: business.businessType,
                 primaryColor: business.primaryColor,
-                logo: business.logoUrl
+                logo: business.logoUrl,
+                businessStatus: business.status || 'active'
             };
 
             // Create JWT token
@@ -333,7 +397,8 @@ export default function AuthRoutes(storage) {
                 email: user.email,
                 role: user.role,
                 businessUUID: business.id,
-                businessId: business.businessId
+                businessId: business.businessId,
+                businessStatus: business.status || 'active'
             };
 
             const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '24h' });
@@ -375,6 +440,19 @@ export default function AuthRoutes(storage) {
                 return res.json({
                     success: true,
                     message: "If the email exists, a new OTP has been sent"
+                });
+            }
+
+            // Check business status before resending OTP
+            const businessId = user.associatedBusinessId || user.institutionId;
+            const businessStatusCheck = await checkBusinessStatus(businessId);
+            
+            if (!businessStatusCheck.isActive) {
+                return res.status(403).json({
+                    success: false,
+                    message: `Your business "${businessStatusCheck.businessName || 'account'}" has been ${businessStatusCheck.businessStatus}. Please contact your administrator.`,
+                    businessStatus: businessStatusCheck.businessStatus,
+                    code: "BUSINESS_DISABLED"
                 });
             }
 
@@ -436,6 +514,19 @@ export default function AuthRoutes(storage) {
                 return res.json({
                     success: true,
                     message: "If the email exists, a reset OTP has been sent"
+                });
+            }
+
+            // Check business status before allowing password reset
+            const businessId = user.associatedBusinessId || user.institutionId;
+            const businessStatusCheck = await checkBusinessStatus(businessId);
+            
+            if (!businessStatusCheck.isActive) {
+                return res.status(403).json({
+                    success: false,
+                    message: `Your business "${businessStatusCheck.businessName || 'account'}" has been ${businessStatusCheck.businessStatus}. Please contact your administrator.`,
+                    businessStatus: businessStatusCheck.businessStatus,
+                    code: "BUSINESS_DISABLED"
                 });
             }
 
@@ -575,6 +666,19 @@ export default function AuthRoutes(storage) {
                 return res.status(404).json({
                     success: false,
                     message: "User not found"
+                });
+            }
+
+            // Check business status before allowing password reset
+            const businessId = user.associatedBusinessId || user.institutionId;
+            const businessStatusCheck = await checkBusinessStatus(businessId);
+            
+            if (!businessStatusCheck.isActive) {
+                return res.status(403).json({
+                    success: false,
+                    message: `Your business "${businessStatusCheck.businessName || 'account'}" has been ${businessStatusCheck.businessStatus}. Please contact your administrator.`,
+                    businessStatus: businessStatusCheck.businessStatus,
+                    code: "BUSINESS_DISABLED"
                 });
             }
 

@@ -1,5 +1,4 @@
 // src/index.js
-
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -58,6 +57,18 @@ async function startServer() {
         app.use("/api/transactions", TransactionRoutes);
         app.use('/api/mpesa', MpesaRoutes);
 
+        // Global business status check middleware for all authenticated routes
+        // (Optional - if you want to enforce business status check globally)
+        app.use('/api', (req, res, next) => {
+            // Skip auth routes
+            if (req.path.startsWith('/auth') || req.path === '/auth') {
+                return next();
+            }
+
+            // For other API routes, we'll rely on route-specific middleware
+            next();
+        });
+
         app.get("/", (req, res) => {
             res.send("WELCOME TO ALVIN API");
         });
@@ -67,6 +78,36 @@ async function startServer() {
                 status: "OK",
                 message: "Server is running correctly",
                 timestamp: new Date().toISOString(),
+            });
+        });
+
+        // Error handling middleware
+        app.use((err, req, res, next) => {
+            console.error('Global error handler:', err);
+
+            // Handle business disabled errors
+            if (err.code === 'BUSINESS_DISABLED' || err.message?.includes('BUSINESS_DISABLED')) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Your business account has been disabled. Please contact your administrator.',
+                    code: 'BUSINESS_DISABLED'
+                });
+            }
+
+            // Handle JWT errors
+            if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Authentication failed. Please login again.',
+                    code: 'AUTH_ERROR'
+                });
+            }
+
+            // Generic error
+            res.status(err.status || 500).json({
+                success: false,
+                message: err.message || 'Internal server error',
+                ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
             });
         });
 

@@ -1,13 +1,12 @@
 // src/routes/BusinessRoutes.js
-
 import express from 'express';
 import { insertBusinessSchema, updateBusinessSchema } from '../schema.js';
 import { z } from 'zod';
 import multer from 'multer';
-import jwt from 'jsonwebtoken';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { createAuthMiddleware } from '../middleware/authMiddleware.js';
 
 // Get __dirname equivalent in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -15,6 +14,19 @@ const __dirname = path.dirname(__filename);
 
 export default function BusinessRoutes(storage) {
     const router = express.Router();
+
+    // Create auth middleware with storage dependency
+    const authMiddleware = createAuthMiddleware(storage);
+    const { 
+        authenticateToken, 
+        requireActiveBusiness, 
+        allowBusinessCreation,
+        requireBusinessOwner,
+        authorize 
+    } = authMiddleware;
+
+    // Admin roles configuration
+    const adminRoles = ['super-admin', 'super_admin', 'Super_Admin', 'Biztrack_ADMIN', 'admin'];
 
     // Ensure logos directory exists - inside src/assets/logos
     const logosDir = path.join(__dirname, '..', 'assets', 'logos');
@@ -139,89 +151,6 @@ export default function BusinessRoutes(storage) {
         };
     };
 
-    // --- JWT Authentication Middleware ---
-    const protect = (req, res, next) => {
-        try {
-            console.log("🔐 Business Routes - Auth Check");
-
-            // Get token from Authorization header
-            const authHeader = req.headers['authorization'];
-
-            if (!authHeader || !authHeader.startsWith('Bearer ')) {
-                return res.status(401).json({
-                    success: false,
-                    message: 'Access denied. No token provided.'
-                });
-            }
-
-            const token = authHeader.split(' ')[1];
-
-            if (!token) {
-                return res.status(401).json({
-                    success: false,
-                    message: 'Access denied. No token provided.'
-                });
-            }
-
-            // Verify the token
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            console.log("✅ Token decoded successfully:", {
-                userId: decoded.id,
-                email: decoded.email,
-                role: decoded.role,
-                businessId: decoded.businessId,
-                businessUUID: decoded.businessUUID
-            });
-
-            // Add user info to request object
-            req.user = decoded;
-            next();
-        } catch (error) {
-            console.error('❌ JWT verification failed:', error.message);
-
-            if (error.name === 'TokenExpiredError') {
-                return res.status(401).json({
-                    success: false,
-                    message: 'Token has expired'
-                });
-            }
-
-            if (error.name === 'JsonWebTokenError') {
-                return res.status(401).json({
-                    success: false,
-                    message: 'Invalid token'
-                });
-            }
-
-            return res.status(401).json({
-                success: false,
-                message: 'Authentication failed'
-            });
-        }
-    };
-
-    // --- Updated Admin Authorization Middleware ---
-    const restrictToAdmin = (req, res, next) => {
-        console.log("👑 Checking admin privileges for user:", {
-            role: req.user.role,
-            email: req.user.email
-        });
-
-        // Check for various admin role formats
-        const adminRoles = ['super-admin', 'super_admin', 'Super_Admin', 'Biztrack_ADMIN', 'admin'];
-
-        if (adminRoles.includes(req.user.role?.toLowerCase())) {
-            console.log("✅ User has admin privileges");
-            next();
-        } else {
-            console.log("❌ User does NOT have admin privileges");
-            return res.status(403).json({
-                success: false,
-                message: 'Forbidden: Insufficient privileges.'
-            });
-        }
-    };
-
     // --- Helper Function to Process FormData ---
     const processBusinessData = (body) => {
         const processedData = { ...body };
@@ -260,10 +189,11 @@ export default function BusinessRoutes(storage) {
     /**
      * @route POST /api/business/create-business
      * @desc Create a new business (Requires Admin). Handles logo upload via FormData.
+     * NOTE: Uses allowBusinessCreation middleware which skips business status check for admin
      */
     router.post('/create-business',
-        protect,
-        restrictToAdmin,
+        authenticateToken,
+        allowBusinessCreation,
         upload.single('logo'),
         async (req, res) => {
             try {
@@ -382,47 +312,387 @@ export default function BusinessRoutes(storage) {
 
     /**
      * @route GET /api/business
-     * @desc Get all businesses (Requires Admin)
+     * @desc Get all businesses (Requires Admin + Active Business)
      */
-    router.get('/', protect, restrictToAdmin, async (req, res) => {
-        try {
-            console.log("📋 GET /api/business - Fetching all businesses");
-            const businesses = await storage.getBusinesses();
-            
-            // SAFE FIX: Ensure businesses is an array before mapping
-            const businessesArray = Array.isArray(businesses) ? businesses : [];
-            
-            // Transform data to match frontend expectations with full URLs
-            const transformedBusinesses = safeMap(businessesArray, business => 
-                transformBusinessResponse(business)
-            );
+    router.get('/', 
+        authenticateToken, 
+        requireActiveBusiness, 
+        authorize(adminRoles),
+        async (req, res) => {
+            try {
+                console.log("📋 GET /api/business - Fetching all businesses");
+                const businesses = await storage.getBusinesses();
+                
+                // SAFE FIX: Ensure businesses is an array before mapping
+                const businessesArray = Array.isArray(businesses) ? businesses : [];
+                
+                // Transform data to match frontend expectations with full URLs
+                const transformedBusinesses = safeMap(businessesArray, business => 
+                    transformBusinessResponse(business)
+                );
 
-            console.log(`✅ Found ${transformedBusinesses.length} businesses`);
+                console.log(`✅ Found ${transformedBusinesses.length} businesses`);
 
-            res.status(200).json({
-                success: true,
-                data: transformedBusinesses
-            });
-        } catch (error) {
-            console.error('❌ Get businesses error:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Internal server error.'
-            });
+                res.status(200).json({
+                    success: true,
+                    data: transformedBusinesses
+                });
+            } catch (error) {
+                console.error('❌ Get businesses error:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Internal server error.'
+                });
+            }
         }
-    });
+    );
 
     /**
      * @route GET /api/business/:id
-     * @desc Get business by ID (Requires Admin or business owner/associate)
+     * @desc Get business by ID (Requires Admin or business owner/associate + Active Business)
      */
-    router.get('/:id', protect, async (req, res) => {
+    router.get('/:id', 
+        authenticateToken, 
+        requireBusinessOwner,
+        async (req, res) => {
+            try {
+                const { id } = req.params;
+                console.log("📋 GET /api/business/:id - Fetching business:", id);
+                
+                const business = await storage.getBusiness(id);
+
+                if (!business) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Business not found.'
+                    });
+                }
+
+                // Transform response with full URL
+                const transformedBusiness = transformBusinessResponse(business);
+
+                res.status(200).json({
+                    success: true,
+                    data: transformedBusiness
+                });
+            } catch (error) {
+                console.error('❌ Get business error:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Internal server error.'
+                });
+            }
+        }
+    );
+
+    /**
+     * @route PUT /api/business/:id
+     * @desc Update business details (Requires Admin or business owner/associate + Active Business). Handles logo update via FormData.
+     */
+    router.put('/:id', 
+        authenticateToken, 
+        requireBusinessOwner,
+        upload.single('logo'), 
+        async (req, res) => {
+            try {
+                const { id } = req.params;
+                const logoFile = req.file;
+                const body = processBusinessData(req.body);
+
+                console.log("📨 PUT Request - Update Request Body:", body);
+                console.log("📁 PUT Request - Update File:", logoFile ? {
+                    originalname: logoFile.originalname,
+                    mimetype: logoFile.mimetype,
+                    size: logoFile.size,
+                    filename: logoFile.filename
+                } : 'No file');
+
+                // 1. Fetch existing business
+                const existingBusiness = await storage.getBusiness(id);
+                if (!existingBusiness) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Business not found.'
+                    });
+                }
+
+                const existingBusinessObj = existingBusiness.toObject ? existingBusiness.toObject() : existingBusiness;
+
+                // 2. Authorization is already handled by requireBusinessOwner middleware
+
+                // 3. Prepare update data from request body
+                const updateData = {};
+
+                // Only update fields that are present in the request
+                const fieldsToUpdate = [
+                    'businessName', 'registrationNumber', 'address', 'businessType',
+                    'email', 'phone', 'website', 'description', 'primaryColor',
+                    'status', 'logoUrl', 'owner'
+                ];
+
+                fieldsToUpdate.forEach(field => {
+                    if (field in body && body[field] !== undefined) {
+                        updateData[field] = body[field];
+                    }
+                });
+
+                // 4. Handle Logo Update
+                let logoUrl = existingBusinessObj.logoUrl; // Start with existing
+
+                if (logoFile) {
+                    // If a file is uploaded, delete old logo (if not default) and use new one
+                    if (logoUrl && logoUrl !== '/assets/logos/default_logo.svg') {
+                        deleteLogoFile(logoUrl);
+                    }
+                    
+                    // Use relative path for new logo
+                    logoUrl = `/assets/logos/${logoFile.filename}`;
+                    console.log(`🖼️ Logo Update (file): New logo saved to ${logoUrl}`);
+                } else if ('logoUrl' in body) {
+                    // If logoUrl is explicitly provided in the request body
+                    if (body.logoUrl === '') {
+                        // Empty string means "clear logo, use default"
+                        if (logoUrl && logoUrl !== '/assets/logos/default_logo.svg') {
+                            deleteLogoFile(logoUrl);
+                        }
+                        logoUrl = '/assets/logos/default_logo.svg';
+                        console.log(`🖼️ Logo cleared, using default: ${logoUrl}`);
+                    } else if (body.logoUrl && body.logoUrl !== logoUrl) {
+                        // New URL provided, delete old logo (if not default)
+                        if (logoUrl && logoUrl !== '/assets/logos/default_logo.svg') {
+                            deleteLogoFile(logoUrl);
+                        }
+                        logoUrl = body.logoUrl; // Already converted to relative path
+                        console.log(`🖼️ Logo Update (URL): ${existingBusinessObj.logoUrl} -> ${logoUrl}`);
+                    }
+                }
+
+                // Add logoUrl to updateData
+                updateData.logoUrl = logoUrl;
+
+                // 5. Zod Validation (partial update)
+                const validatedData = updateBusinessSchema.parse(updateData);
+                console.log("✅ Validated PUT Update Data:", validatedData);
+
+                // 6. Check for registration number uniqueness (if being updated)
+                if (validatedData.registrationNumber && 
+                    validatedData.registrationNumber !== existingBusinessObj.registrationNumber) {
+                    const existingBusinessByReg = await storage.getBusinessByRegistrationNumber(validatedData.registrationNumber);
+                    if (existingBusinessByReg && existingBusinessByReg.id !== existingBusinessObj.id) {
+                        return res.status(400).json({
+                            success: false,
+                            message: 'A business with this registration number already exists.'
+                        });
+                    }
+                }
+
+                // Prepare final update payload
+                const finalUpdatePayload = {
+                    ...validatedData,
+                    updatedAt: new Date().toISOString()
+                };
+
+                console.log("💾 PUT Updating Business Data (relative logo):", finalUpdatePayload.logoUrl);
+
+                // 7. Update Business in DB
+                const updatedBusiness = await storage.updateBusiness(id, finalUpdatePayload);
+
+                if (!updatedBusiness) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Business not found after update attempt.'
+                    });
+                }
+
+                // Transform response with full URL
+                const transformedBusiness = transformBusinessResponse(updatedBusiness);
+
+                res.status(200).json({
+                    success: true,
+                    message: 'Business updated successfully.',
+                    data: transformedBusiness
+                });
+
+            } catch (error) {
+                // FIXED: Add safe check for error.errors
+                if (error instanceof z.ZodError) {
+                    console.error("❌ PUT Validation Error:", error);
+                    
+                    // SAFE FIX: Use safeMap to prevent undefined .map() call
+                    const validationErrors = safeMap(error.errors || [], err => ({
+                        field: err.path ? err.path.join('.') : 'unknown',
+                        message: err.message || 'Validation error'
+                    }));
+                    
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Validation failed',
+                        errors: validationErrors
+                    });
+                }
+                
+                if (error.message === 'Only image files are allowed!') {
+                    return res.status(400).json({
+                        success: false,
+                        message: error.message
+                    });
+                }
+                
+                console.error('🚨 PUT Business update error:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Internal server error during business update.',
+                    error: error.message
+                });
+            }
+        }
+    );
+
+    /**
+     * @route PUT /api/business/:id/status
+     * @desc Toggle business status (Requires Admin + Active Business)
+     */
+    router.put('/:id/status', 
+        authenticateToken, 
+        requireActiveBusiness, 
+        authorize(adminRoles),
+        async (req, res) => {
+            try {
+                const { id } = req.params;
+                const { status } = req.body;
+
+                if (!status || !['active', 'inactive', 'new'].includes(status.toLowerCase())) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Invalid status provided. Must be active, inactive, or new.'
+                    });
+                }
+
+                const existingBusiness = await storage.getBusiness(id);
+                if (!existingBusiness) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Business not found.'
+                    });
+                }
+
+                // If admin is disabling their own business, special check
+                const isAdminDisablingOwnBusiness = 
+                    (req.user.businessUUID === id || req.user.associatedBusinessId === id) && 
+                    ['inactive', 'disabled'].includes(status.toLowerCase());
+                
+                if (isAdminDisablingOwnBusiness) {
+                    console.log("⚠️ Admin is attempting to disable their own business");
+                    // Allow this - admin can disable their own business
+                }
+
+                const updatedBusiness = await storage.updateBusiness(id, {
+                    status: status.toLowerCase(),
+                    updatedAt: new Date().toISOString()
+                });
+
+                if (!updatedBusiness) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Business not found after status update attempt.'
+                    });
+                }
+
+                // Transform response with full URL
+                const transformedBusiness = transformBusinessResponse(updatedBusiness);
+
+                res.status(200).json({
+                    success: true,
+                    message: `Business status updated to ${status.toUpperCase()}.`,
+                    data: transformedBusiness
+                });
+
+            } catch (error) {
+                console.error('❌ Status update error:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Internal server error during status update.'
+                });
+            }
+        }
+    );
+
+    /**
+     * @route DELETE /api/business/:id
+     * @desc Delete business (Archives by setting status to 'inactive') (Requires Admin + Active Business)
+     */
+    router.delete('/:id', 
+        authenticateToken, 
+        requireActiveBusiness, 
+        authorize(adminRoles),
+        async (req, res) => {
+            try {
+                const { id } = req.params;
+
+                const existingBusiness = await storage.getBusiness(id);
+                if (!existingBusiness) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Business not found.'
+                    });
+                }
+
+                const existingBusinessObj = existingBusiness.toObject ? existingBusiness.toObject() : existingBusiness;
+
+                // If admin is deleting their own business, special check
+                const isAdminDeletingOwnBusiness = 
+                    req.user.businessUUID === id || req.user.associatedBusinessId === id;
+                
+                if (isAdminDeletingOwnBusiness) {
+                    console.log("⚠️ Admin is attempting to delete their own business");
+                    // Warn but allow
+                }
+
+                // Delete logo file if it exists and is not default
+                if (existingBusinessObj.logoUrl && existingBusinessObj.logoUrl !== '/assets/logos/default_logo.svg') {
+                    deleteLogoFile(existingBusinessObj.logoUrl);
+                }
+
+                // Set business status to 'inactive' (archive)
+                const archivedBusiness = await storage.updateBusiness(id, {
+                    status: 'inactive',
+                    updatedAt: new Date().toISOString()
+                });
+
+                if (!archivedBusiness) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Business not found after archive attempt.'
+                    });
+                }
+
+                const archivedBusinessObj = archivedBusiness.toObject ? archivedBusiness.toObject() : archivedBusiness;
+
+                res.status(200).json({
+                    success: true,
+                    message: `Business "${archivedBusinessObj.businessName}" successfully archived.`,
+                    data: archivedBusinessObj
+                });
+
+            } catch (error) {
+                console.error('❌ Business delete/archive error:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Internal server error during business deletion.'
+                });
+            }
+        }
+    );
+
+    /**
+     * @route GET /api/business/:id/status
+     * @desc Get business status (Public endpoint for checking business status)
+     */
+    router.get('/:id/status', async (req, res) => {
         try {
             const { id } = req.params;
-            console.log("📋 GET /api/business/:id - Fetching business:", id);
             
             const business = await storage.getBusiness(id);
-
             if (!business) {
                 return res.status(404).json({
                     success: false,
@@ -430,24 +700,18 @@ export default function BusinessRoutes(storage) {
                 });
             }
 
-            // Authorization Check
-            if (req.user.role !== 'Biztrack_ADMIN' && req.user.role !== 'Super_Admin' && 
-                req.user.associatedBusinessId !== business.id) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Forbidden: Not authorized to view this business.'
-                });
-            }
-
-            // Transform response with full URL
-            const transformedBusiness = transformBusinessResponse(business);
-
             res.status(200).json({
                 success: true,
-                data: transformedBusiness
+                data: {
+                    id: business.id,
+                    businessId: business.businessId,
+                    businessName: business.businessName,
+                    status: business.status || 'active',
+                    isActive: !['inactive', 'disabled', 'suspended'].includes((business.status || '').toLowerCase())
+                }
             });
         } catch (error) {
-            console.error('❌ Get business error:', error);
+            console.error('❌ Get business status error:', error);
             res.status(500).json({
                 success: false,
                 message: 'Internal server error.'
@@ -455,299 +719,31 @@ export default function BusinessRoutes(storage) {
         }
     });
 
-    /**
-     * @route PUT /api/business/:id
-     * @desc Update business details (Requires Admin or business owner/associate). Handles logo update via FormData.
-     */
-    router.put('/:id', protect, upload.single('logo'), async (req, res) => {
-        try {
-            const { id } = req.params;
-            const logoFile = req.file;
-            const body = processBusinessData(req.body);
-
-            console.log("📨 PUT Request - Update Request Body:", body);
-            console.log("📁 PUT Request - Update File:", logoFile ? {
-                originalname: logoFile.originalname,
-                mimetype: logoFile.mimetype,
-                size: logoFile.size,
-                filename: logoFile.filename
-            } : 'No file');
-
-            // 1. Fetch existing business
-            const existingBusiness = await storage.getBusiness(id);
-            if (!existingBusiness) {
-                return res.status(404).json({
+    // Add test route to debug storage (with business check)
+    router.get('/debug/storage', 
+        authenticateToken, 
+        requireActiveBusiness, 
+        async (req, res) => {
+            try {
+                const businesses = await storage.getBusinesses();
+                res.json({
+                    success: true,
+                    storageType: typeof storage,
+                    businessesType: typeof businesses,
+                    isArray: Array.isArray(businesses),
+                    count: businesses?.length || 0,
+                    sample: businesses?.[0] || null,
+                    userBusinessId: req.user.businessUUID,
+                    userBusinessStatus: req.business?.status
+                });
+            } catch (error) {
+                res.status(500).json({
                     success: false,
-                    message: 'Business not found.'
+                    error: error.message
                 });
             }
-
-            const existingBusinessObj = existingBusiness.toObject ? existingBusiness.toObject() : existingBusiness;
-
-            // 2. Authorization Check
-            const isAdmin = req.user.role === 'Biztrack_ADMIN' || req.user.role === 'Super_Admin';
-            const isBusinessOwner = req.user.associatedBusinessId === existingBusinessObj.id;
-
-            if (!isAdmin && !isBusinessOwner) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Forbidden: Not authorized to edit this business.'
-                });
-            }
-
-            // 3. Prepare update data from request body
-            const updateData = {};
-
-            // Only update fields that are present in the request
-            const fieldsToUpdate = [
-                'businessName', 'registrationNumber', 'address', 'businessType',
-                'email', 'phone', 'website', 'description', 'primaryColor',
-                'status', 'logoUrl', 'owner'
-            ];
-
-            fieldsToUpdate.forEach(field => {
-                if (field in body && body[field] !== undefined) {
-                    updateData[field] = body[field];
-                }
-            });
-
-            // 4. Handle Logo Update
-            let logoUrl = existingBusinessObj.logoUrl; // Start with existing
-
-            if (logoFile) {
-                // If a file is uploaded, delete old logo (if not default) and use new one
-                if (logoUrl && logoUrl !== '/assets/logos/default_logo.svg') {
-                    deleteLogoFile(logoUrl);
-                }
-                
-                // Use relative path for new logo
-                logoUrl = `/assets/logos/${logoFile.filename}`;
-                console.log(`🖼️ Logo Update (file): New logo saved to ${logoUrl}`);
-            } else if ('logoUrl' in body) {
-                // If logoUrl is explicitly provided in the request body
-                if (body.logoUrl === '') {
-                    // Empty string means "clear logo, use default"
-                    if (logoUrl && logoUrl !== '/assets/logos/default_logo.svg') {
-                        deleteLogoFile(logoUrl);
-                    }
-                    logoUrl = '/assets/logos/default_logo.svg';
-                    console.log(`🖼️ Logo cleared, using default: ${logoUrl}`);
-                } else if (body.logoUrl && body.logoUrl !== logoUrl) {
-                    // New URL provided, delete old logo (if not default)
-                    if (logoUrl && logoUrl !== '/assets/logos/default_logo.svg') {
-                        deleteLogoFile(logoUrl);
-                    }
-                    logoUrl = body.logoUrl; // Already converted to relative path
-                    console.log(`🖼️ Logo Update (URL): ${existingBusinessObj.logoUrl} -> ${logoUrl}`);
-                }
-            }
-
-            // Add logoUrl to updateData
-            updateData.logoUrl = logoUrl;
-
-            // 5. Zod Validation (partial update)
-            const validatedData = updateBusinessSchema.parse(updateData);
-            console.log("✅ Validated PUT Update Data:", validatedData);
-
-            // 6. Check for registration number uniqueness (if being updated)
-            if (validatedData.registrationNumber && 
-                validatedData.registrationNumber !== existingBusinessObj.registrationNumber) {
-                const existingBusinessByReg = await storage.getBusinessByRegistrationNumber(validatedData.registrationNumber);
-                if (existingBusinessByReg && existingBusinessByReg.id !== existingBusinessObj.id) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'A business with this registration number already exists.'
-                    });
-                }
-            }
-
-            // Prepare final update payload
-            const finalUpdatePayload = {
-                ...validatedData,
-                updatedAt: new Date().toISOString()
-            };
-
-            console.log("💾 PUT Updating Business Data (relative logo):", finalUpdatePayload.logoUrl);
-
-            // 7. Update Business in DB
-            const updatedBusiness = await storage.updateBusiness(id, finalUpdatePayload);
-
-            if (!updatedBusiness) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Business not found after update attempt.'
-                });
-            }
-
-            // Transform response with full URL
-            const transformedBusiness = transformBusinessResponse(updatedBusiness);
-
-            res.status(200).json({
-                success: true,
-                message: 'Business updated successfully.',
-                data: transformedBusiness
-            });
-
-        } catch (error) {
-            // FIXED: Add safe check for error.errors
-            if (error instanceof z.ZodError) {
-                console.error("❌ PUT Validation Error:", error);
-                
-                // SAFE FIX: Use safeMap to prevent undefined .map() call
-                const validationErrors = safeMap(error.errors || [], err => ({
-                    field: err.path ? err.path.join('.') : 'unknown',
-                    message: err.message || 'Validation error'
-                }));
-                
-                return res.status(400).json({
-                    success: false,
-                    message: 'Validation failed',
-                    errors: validationErrors
-                });
-            }
-            
-            if (error.message === 'Only image files are allowed!') {
-                return res.status(400).json({
-                    success: false,
-                    message: error.message
-                });
-            }
-            
-            console.error('🚨 PUT Business update error:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Internal server error during business update.',
-                error: error.message
-            });
         }
-    });
-
-    /**
-     * @route PUT /api/business/:id/status
-     * @desc Toggle business status (Requires Admin)
-     */
-    router.put('/:id/status', protect, restrictToAdmin, async (req, res) => {
-        try {
-            const { id } = req.params;
-            const { status } = req.body;
-
-            if (!status || !['active', 'inactive', 'new'].includes(status.toLowerCase())) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Invalid status provided. Must be active, inactive, or new.'
-                });
-            }
-
-            const existingBusiness = await storage.getBusiness(id);
-            if (!existingBusiness) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Business not found.'
-                });
-            }
-
-            const updatedBusiness = await storage.updateBusiness(id, {
-                status: status.toLowerCase(),
-                updatedAt: new Date().toISOString()
-            });
-
-            if (!updatedBusiness) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Business not found after status update attempt.'
-                });
-            }
-
-            // Transform response with full URL
-            const transformedBusiness = transformBusinessResponse(updatedBusiness);
-
-            res.status(200).json({
-                success: true,
-                message: `Business status updated to ${status.toUpperCase()}.`,
-                data: transformedBusiness
-            });
-
-        } catch (error) {
-            console.error('❌ Status update error:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Internal server error during status update.'
-            });
-        }
-    });
-
-    /**
-     * @route DELETE /api/business/:id
-     * @desc Delete business (Archives by setting status to 'inactive') (Requires Admin)
-     */
-    router.delete('/:id', protect, restrictToAdmin, async (req, res) => {
-        try {
-            const { id } = req.params;
-
-            const existingBusiness = await storage.getBusiness(id);
-            if (!existingBusiness) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Business not found.'
-                });
-            }
-
-            const existingBusinessObj = existingBusiness.toObject ? existingBusiness.toObject() : existingBusiness;
-
-            // Delete logo file if it exists and is not default
-            if (existingBusinessObj.logoUrl && existingBusinessObj.logoUrl !== '/assets/logos/default_logo.svg') {
-                deleteLogoFile(existingBusinessObj.logoUrl);
-            }
-
-            // Set business status to 'inactive' (archive)
-            const archivedBusiness = await storage.updateBusiness(id, {
-                status: 'inactive',
-                updatedAt: new Date().toISOString()
-            });
-
-            if (!archivedBusiness) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Business not found after archive attempt.'
-                });
-            }
-
-            const archivedBusinessObj = archivedBusiness.toObject ? archivedBusiness.toObject() : archivedBusiness;
-
-            res.status(200).json({
-                success: true,
-                message: `Business "${archivedBusinessObj.businessName}" successfully archived.`,
-                data: archivedBusinessObj
-            });
-
-        } catch (error) {
-            console.error('❌ Business delete/archive error:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Internal server error during business deletion.'
-            });
-        }
-    });
-
-    // Add test route to debug storage
-    router.get('/debug/storage', async (req, res) => {
-        try {
-            const businesses = await storage.getBusinesses();
-            res.json({
-                success: true,
-                storageType: typeof storage,
-                businessesType: typeof businesses,
-                isArray: Array.isArray(businesses),
-                count: businesses?.length || 0,
-                sample: businesses?.[0] || null
-            });
-        } catch (error) {
-            res.status(500).json({
-                success: false,
-                error: error.message
-            });
-        }
-    });
+    );
 
     return router;
 }
