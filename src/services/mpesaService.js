@@ -62,7 +62,7 @@ class MpesaService {
     const hours = String(date.getHours()).padStart(2, '0');
     const minutes = String(date.getMinutes()).padStart(2, '0');
     const seconds = String(date.getSeconds()).padStart(2, '0');
-    
+
     return `${year}${month}${day}${hours}${minutes}${seconds}`;
   }
 
@@ -80,9 +80,9 @@ class MpesaService {
       }
 
       const auth = Buffer.from(`${CONSUMER_KEY}:${CONSUMER_SECRET}`).toString('base64');
-      
+
       console.log('🔑 Getting M-Pesa access token...');
-      
+
       const response = await axios.get(AUTH_URL, {
         headers: {
           'Authorization': `Basic ${auth}`,
@@ -93,9 +93,9 @@ class MpesaService {
 
       this.accessToken = response.data.access_token;
       this.tokenExpiryTime = now + (response.data.expires_in * 1000);
-      
+
       console.log('✅ Access token obtained, expires in:', response.data.expires_in, 'seconds');
-      
+
       return this.accessToken;
     } catch (error) {
       console.error('❌ Failed to get access token:', error.message);
@@ -106,36 +106,59 @@ class MpesaService {
       throw new Error(`Access token error: ${error.message}`);
     }
   }
-
   formatPhoneNumber(phone) {
     if (!phone) throw new Error('Phone number is required');
-    
+
     let formatted = phone.toString().trim();
-    
+
     // Remove all non-digit characters
     formatted = formatted.replace(/\D/g, '');
-    
+
+    console.log('📱 Phone formatting:', {
+      original: phone,
+      cleaned: formatted,
+      length: formatted.length
+    });
+
+    // Handle empty or too short numbers
+    if (formatted.length < 9) {
+      throw new Error(`Phone number too short: ${phone}. Minimum 9 digits required after cleaning`);
+    }
+
     // Format to 254XXXXXXXXX
     if (formatted.startsWith('0')) {
-      formatted = '254' + formatted.substring(1);
-    } else if (formatted.startsWith('7') && formatted.length === 9) {
+      // Handle 07XXXXXXXX or 01XXXXXXXX (10 digits including leading 0)
+      if (formatted.length === 10) {
+        formatted = '254' + formatted.substring(1);
+      } else {
+        throw new Error(`Invalid phone format: ${phone}. 0-prefixed numbers should be 10 digits`);
+      }
+    } else if ((formatted.startsWith('7') || formatted.startsWith('1')) && formatted.length === 9) {
+      // 7XXXXXXXX or 1XXXXXXXX → 2547XXXXXXXX or 2541XXXXXXXX
       formatted = '254' + formatted;
-    } else if (formatted.startsWith('2547') && formatted.length === 12) {
-      // Already correct
+    } else if ((formatted.startsWith('2547') || formatted.startsWith('2541')) && formatted.length === 12) {
+      // Already correct format
     } else if (formatted.startsWith('254') && formatted.length === 12) {
-      // Already correct but check if starts with 2547
-      if (!formatted.startsWith('2547')) {
-        throw new Error('Invalid Kenyan phone number. Must start with 2547');
+      // Check if it's a valid 254 number
+      if (!formatted.startsWith('2547') && !formatted.startsWith('2541')) {
+        throw new Error(`Invalid Kenyan phone number: ${phone}. Must start with 2547 or 2541`);
       }
     } else {
-      throw new Error(`Invalid phone format: ${phone}. Expected: 07XXXXXXXX or 2547XXXXXXXX`);
+      throw new Error(`Invalid phone format: ${phone}. Expected formats:
+      - 07XXXXXXXX (10 digits)
+      - 01XXXXXXXX (10 digits) 
+      - 2547XXXXXXXX (12 digits)
+      - 2541XXXXXXXX (12 digits)
+      - 7XXXXXXXX (9 digits)
+      - 1XXXXXXXX (9 digits)`);
     }
-    
-    // Final validation
-    if (!/^2547\d{8}$/.test(formatted)) {
-      throw new Error(`Invalid phone number: ${phone}. Must be 12 digits starting with 2547`);
+
+    // Final validation - accept both 2547 and 2541
+    if (!/^254(7|1)\d{8}$/.test(formatted)) {
+      throw new Error(`Invalid phone number format: ${formatted}. Must be 12 digits starting with 2547 or 2541`);
     }
-    
+
+    console.log('✅ Formatted phone:', formatted);
     return formatted;
   }
 
@@ -161,7 +184,7 @@ class MpesaService {
 
       // Format phone
       const formattedPhone = this.formatPhoneNumber(phone);
-      
+
       // Generate timestamp and password
       const timestamp = this.generateTimestamp();
       const passwordString = `${BUSINESS_SHORTCODE}${PASSKEY}${timestamp}`;
@@ -202,7 +225,7 @@ class MpesaService {
 
     } catch (error) {
       console.error('❌ STK Push failed:', error.message);
-      
+
       let errorData = {
         ResponseCode: "500",
         ResponseDescription: "Failed to send STK Push",
@@ -262,7 +285,7 @@ class MpesaService {
 
     } catch (error) {
       console.error('❌ Query failed:', error.message);
-      
+
       let errorData = {
         ResultCode: "500",
         ResultDesc: "Failed to query transaction status",

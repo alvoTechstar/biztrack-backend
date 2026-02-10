@@ -103,18 +103,34 @@ export const initiateStkPush = async (req, res) => {
       );
     }
 
+    // Format phone number - UPDATED to handle 01 and 2541 numbers
     let formattedPhone = phone.toString().trim();
+
+    // Remove + if present
     if (formattedPhone.startsWith('+')) {
       formattedPhone = formattedPhone.substring(1);
     }
 
+    // Handle different formats
     if (formattedPhone.startsWith('0')) {
+      // 07XXXXXXXX or 01XXXXXXXX → 2547XXXXXXXX or 2541XXXXXXXX
       formattedPhone = '254' + formattedPhone.substring(1);
     } else if (formattedPhone.startsWith('7') && formattedPhone.length === 9) {
+      // 7XXXXXXXX → 2547XXXXXXXX
       formattedPhone = '254' + formattedPhone;
     } else if (formattedPhone.startsWith('1') && formattedPhone.length === 9) {
+      // 1XXXXXXXX → 2541XXXXXXXX
       formattedPhone = '254' + formattedPhone;
     }
+    // 2547XXXXXXXX or 2541XXXXXXXX already in correct format
+
+    console.log('📱 Phone formatting:', {
+      original: phone,
+      formatted: formattedPhone,
+      isValid: /^254(7|1)\d{8}$/.test(formattedPhone)
+    });
+
+    // Validate phone number format - UPDATED to accept 2541 numbers
     if (!/^254(7|1)\d{8}$/.test(formattedPhone)) {
       return res.status(400).json({
         success: false,
@@ -122,7 +138,6 @@ export const initiateStkPush = async (req, res) => {
       });
     }
 
-    // Rest of the function remains the same...
     // Validate amount
     const amountNumber = parseFloat(amount);
     if (amountNumber < 1) {
@@ -132,10 +147,124 @@ export const initiateStkPush = async (req, res) => {
       });
     }
 
-    // Continue with the rest of the function...
-    // [Rest of your existing code]
+    // Ensure amount matches transaction
+    if (amountNumber !== transaction.totalAmount) {
+      console.warn(`⚠️ Amount mismatch: ${amountNumber} vs ${transaction.totalAmount}`);
+    }
+
+    const accountReference = transactionId;
+    const finalDescription = description || `Payment for order ${transactionId}`;
+
+    console.log('🔄 Sending STK Push:', {
+      phone: formattedPhone,
+      amount: amountNumber,
+      transactionId,
+      accountReference
+    });
+
+    // Send STK Push
+    const mpesaResponse = await mpesaService.sendStkPush(
+      formattedPhone,
+      amountNumber,
+      accountReference,
+      finalDescription
+    );
+
+    console.log('📱 M-PESA Response:', mpesaResponse);
+
+    if (mpesaResponse.ResponseCode === "0") {
+      // Success - update transaction
+      const updatedTransaction = await Transaction.findOneAndUpdate(
+        { transactionId },
+        {
+          status: 'pending',
+          paymentStatus: 'pending',
+          paymentMethod: 'mpesa',
+          amountPaid: amountNumber,
+          customerPhone: formattedPhone,
+          checkoutRequestId: mpesaResponse.CheckoutRequestID,
+          merchantRequestId: mpesaResponse.MerchantRequestID,
+          paymentDetails: {
+            checkoutRequestId: mpesaResponse.CheckoutRequestID,
+            merchantRequestId: mpesaResponse.MerchantRequestID,
+            phone: formattedPhone,
+            amount: amountNumber,
+            stkResponse: mpesaResponse,
+            initiatedAt: new Date(),
+            description: finalDescription
+          },
+          errorMessage: null
+        },
+        { new: true }
+      );
+
+      console.log('✅ STK Push successful:', {
+        transactionId,
+        checkoutRequestId: mpesaResponse.CheckoutRequestID
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'STK Push sent successfully',
+        data: {
+          checkoutRequestId: mpesaResponse.CheckoutRequestID,
+          merchantRequestId: mpesaResponse.MerchantRequestID,
+          customerMessage: mpesaResponse.CustomerMessage,
+          phone: formattedPhone,
+          amount: amountNumber,
+          transactionId: transactionId,
+          status: 'pending',
+          // For frontend polling
+          pollEndpoint: `/api/mpesa/status/${mpesaResponse.CheckoutRequestID}`
+        }
+      });
+    } else {
+      // Failed - update transaction
+      await Transaction.findOneAndUpdate(
+        { transactionId },
+        {
+          status: 'failed',
+          paymentStatus: 'failed',
+          paymentMethod: 'mpesa',
+          errorMessage: mpesaResponse.ResponseDescription || 'STK Push failed'
+        }
+      );
+
+      console.error('❌ STK Push failed:', mpesaResponse.ResponseDescription);
+
+      return res.status(400).json({
+        success: false,
+        message: mpesaResponse.ResponseDescription || 'STK Push failed',
+        responseCode: mpesaResponse.ResponseCode,
+        data: mpesaResponse
+      });
+    }
+
   } catch (error) {
-    // Error handling remains the same
+    console.error('❌ Error initiating STK Push:', error);
+    
+    // Try to mark transaction as failed
+    try {
+      const { transactionId } = req.body;
+      if (transactionId) {
+        await Transaction.findOneAndUpdate(
+          { transactionId },
+          {
+            status: 'failed',
+            paymentStatus: 'failed',
+            errorMessage: error.message
+          }
+        );
+      }
+    } catch (updateError) {
+      console.error('❌ Could not update transaction:', updateError);
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error initiating M-PESA payment',
+      error: error.message
+    });
   }
 };
 
