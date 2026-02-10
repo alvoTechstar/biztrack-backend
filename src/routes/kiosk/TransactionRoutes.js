@@ -1,33 +1,39 @@
 // backend/routes/TransactionRoutes.js
 import express from 'express';
 import {
-  createTransaction,
-  getTransactionsByBusiness,
-  getDailyReportByBusiness,
-  getAllTransactions,
-  updateTransaction // ADD THIS IMPORT
+    createTransaction,
+    getTransactionsByBusiness,
+    getDailyReportByBusiness,
+    getAllTransactions,
+    updateTransaction,
+    getTransactionByTransactionId
 } from '../../controllers/TransactionController.js';
 import { authenticateToken } from '../../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-router.use(authenticateToken);
+// Create a new transaction
+// POST /api/transactions
+router.post('/', authenticateToken, createTransaction);
 
-// Create transaction
-router.route('/')
-  .post(createTransaction)
-  .get(getAllTransactions); // GET all transactions
-
-// Update transaction (for debt payments)
-router.route('/:id')
-  .put(updateTransaction); // ADD THIS ROUTE
+// Get all transactions (for debugging)
+// GET /api/transactions
+router.get('/', authenticateToken, getAllTransactions);
 
 // Get transactions by business ID
-router.route('/business/:businessId')
-  .get(getTransactionsByBusiness);
+// GET /api/transactions/business/:businessId
+router.get('/business/:businessId', authenticateToken, getTransactionsByBusiness);
 
 // Get daily report by business
-router.route('/report/business/:businessId/:date')
-  .get(getDailyReportByBusiness);
+// GET /api/transactions/business/:businessId/report/:date
+router.get('/business/:businessId/report/:date', authenticateToken, getDailyReportByBusiness);
+
+// Get transaction by transactionId (for polling) - MUST be before /:id route
+// GET /api/transactions/by-id/:transactionId
+router.get('/by-id/:transactionId', authenticateToken, getTransactionByTransactionId);
+
+// Update transaction (for debt payment and M-PESA updates)
+// PUT /api/transactions/:id
+router.put('/:id', authenticateToken, updateTransaction);
 
 export default router;

@@ -1,4 +1,4 @@
-// models/Transaction.js
+// models/Transaction.js - UPDATED VERSION
 import mongoose from 'mongoose';
 
 const transactionSchema = new mongoose.Schema({
@@ -9,7 +9,7 @@ const transactionSchema = new mongoose.Schema({
         index: true
     },
     
-    // CHANGE: Use businessId (numeric/String) instead of kioskId (ObjectId)
+    // Business information
     businessId: {
         type: String,
         required: true
@@ -48,7 +48,7 @@ const transactionSchema = new mongoose.Schema({
     // Transaction items
     items: [{
         productId: {
-            type: String, // Changed from ObjectId to String
+            type: String,
             required: true
         },
         productName: {
@@ -58,7 +58,7 @@ const transactionSchema = new mongoose.Schema({
         quantity: {
             type: Number,
             required: true,
-            min: [0.01, 'Quantity must be at least 0.01'], // CHANGED: Was min: 1, now allows fractional quantities
+            min: [0.01, 'Quantity must be at least 0.01'],
             validate: {
                 validator: function(value) {
                     return value > 0;
@@ -66,7 +66,7 @@ const transactionSchema = new mongoose.Schema({
                 message: 'Quantity must be greater than 0'
             }
         },
-        unit: {  // NEW FIELD: Track measurement unit (kg, pieces, liters, etc.)
+        unit: {
             type: String,
             default: 'units',
             trim: true
@@ -82,44 +82,56 @@ const transactionSchema = new mongoose.Schema({
         }
     }],
 
-    // Payment information
+    // Financial information
     totalAmount: {
         type: Number,
         required: true,
         min: 0
     },
+    
+    // Transaction type - FIXED: Changed enum values
     type: {
         type: String,
-        enum: ['cash', 'mpesa', 'debt'],
-        required: true
+        enum: ['sale', 'debt', 'refund', 'return', 'adjustment'],
+        default: 'sale'
     },
+    
+    // Payment method - Separate from transaction type
     paymentMethod: {
         type: String,
         enum: ['cash', 'mpesa', 'debt'],
         required: true
     },
+    
+    // For debt payments that were paid later
     originalPaymentMethod: {
         type: String,
         enum: ['cash', 'mpesa', 'debt']
     },
+    
+    // Transaction status
     status: {
         type: String,
-        enum: ['completed', 'pending', 'failed'],
+        enum: ['completed', 'pending', 'failed', 'cancelled'],
         default: 'pending'
     },
+    
+    // Payment status
     paymentStatus: {
         type: String,
-        enum: ['paid', 'pending', 'failed'],
+        enum: ['paid', 'pending', 'failed', 'cancelled'],
         default: 'pending'
     },
 
     // Cash payment specific
     amountPaid: {
         type: Number,
+        default: 0,
         min: 0
     },
     change: {
         type: Number,
+        default: 0,
         min: 0
     },
 
@@ -130,14 +142,27 @@ const transactionSchema = new mongoose.Schema({
     mpesaReceipt: {
         type: String
     },
+    
+    // M-PESA transaction IDs
+    checkoutRequestId: {
+        type: String,
+        index: true
+    },
+    merchantRequestId: {
+        type: String,
+        index: true
+    },
 
-    // Debt payment specific
+    // Customer information (for debt transactions)
     customerName: {
-        type: String
+        type: String,
+        default: ''
     },
     notes: {
         type: String
     },
+    
+    // Debt payment specific
     debtPaid: {
         type: Boolean,
         default: false
@@ -150,7 +175,7 @@ const transactionSchema = new mongoose.Schema({
         type: Date
     },
 
-    // Payment date fields - NEW
+    // Payment date fields
     datePaid: {
         type: Date
     },
@@ -164,9 +189,10 @@ const transactionSchema = new mongoose.Schema({
         type: Date
     },
 
-    // Payment details - NEW
+    // Payment details (for storing M-PESA response, callback data, etc.)
     paymentDetails: {
-        type: mongoose.Schema.Types.Mixed
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
     },
 
     // General transaction info
@@ -187,6 +213,8 @@ transactionSchema.index({ shopkeeperId: 1, timestamp: -1 });
 transactionSchema.index({ businessId: 1, status: 1 });
 transactionSchema.index({ businessId: 1, paymentMethod: 1 });
 transactionSchema.index({ businessId: 1, debtPaid: 1 });
+transactionSchema.index({ transactionId: 1 }); // Add this for faster lookups
+transactionSchema.index({ checkoutRequestId: 1 }); // Add this for M-PESA callbacks
 
 const Transaction = mongoose.model('Transaction', transactionSchema);
 

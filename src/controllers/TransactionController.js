@@ -59,7 +59,7 @@ export const createTransaction = async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating transaction:', error);
-    
+
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map(err => err.message);
       return res.status(400).json({
@@ -88,18 +88,18 @@ export const createTransaction = async (req, res) => {
 export const getTransactionsByBusiness = async (req, res) => {
   try {
     const { businessId } = req.params;
-    const { 
-      startDate, 
-      endDate, 
-      paymentMethod, 
-      status, 
+    const {
+      startDate,
+      endDate,
+      paymentMethod,
+      status,
       shopkeeperId,
       limit = 100,
-      page = 1 
+      page = 1
     } = req.query;
-    
+
     let query = { businessId };
-    
+
     // Date range filter
     if (startDate && endDate) {
       query.timestamp = {
@@ -107,31 +107,31 @@ export const getTransactionsByBusiness = async (req, res) => {
         $lte: new Date(endDate)
       };
     }
-    
+
     // Payment method filter
     if (paymentMethod) {
       query.paymentMethod = paymentMethod.toLowerCase();
     }
-    
+
     // Status filter
     if (status) {
       query.status = status.toLowerCase();
     }
-    
+
     // Shopkeeper filter
     if (shopkeeperId) {
       query.shopkeeperId = shopkeeperId;
     }
-    
+
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    
+
     const transactions = await Transaction.find(query)
       .sort({ timestamp: -1 })
       .skip(skip)
       .limit(parseInt(limit));
-    
+
     const total = await Transaction.countDocuments(query);
-    
+
     res.json({
       success: true,
       transactions,
@@ -155,59 +155,59 @@ export const getDailyReportByBusiness = async (req, res) => {
   try {
     const { businessId, date } = req.params;
     const { shopkeeperId } = req.query;
-    
+
     const startDate = new Date(date);
     startDate.setHours(0, 0, 0, 0);
-    
+
     const endDate = new Date(date);
     endDate.setHours(23, 59, 59, 999);
-    
+
     let query = {
       businessId,
       timestamp: { $gte: startDate, $lte: endDate }
     };
-    
+
     // Filter by shopkeeper if provided
     if (shopkeeperId) {
       query.shopkeeperId = shopkeeperId;
     }
-    
+
     const transactions = await Transaction.find(query)
       .sort({ timestamp: -1 });
-    
+
     const completedTransactions = transactions.filter(t => t.status === 'completed');
     const cashTransactions = completedTransactions.filter(t => t.paymentMethod === 'cash');
     const mpesaTransactions = completedTransactions.filter(t => t.paymentMethod === 'mpesa');
     const debtTransactions = transactions.filter(t => t.paymentMethod === 'debt' || t.type === 'debt');
-    
+
     // Calculate totals
-    const totalRevenue = completedTransactions.reduce((sum, t) => 
+    const totalRevenue = completedTransactions.reduce((sum, t) =>
       sum + (t.totalAmount || 0), 0
     );
-    
-    const cashRevenue = cashTransactions.reduce((sum, t) => 
+
+    const cashRevenue = cashTransactions.reduce((sum, t) =>
       sum + (t.totalAmount || 0), 0
     );
-    
-    const mpesaRevenue = mpesaTransactions.reduce((sum, t) => 
+
+    const mpesaRevenue = mpesaTransactions.reduce((sum, t) =>
       sum + (t.totalAmount || 0), 0
     );
-    
+
     const outstandingDebt = debtTransactions
       .filter(t => t.status === 'pending' || !t.debtPaid)
       .reduce((sum, t) => sum + (t.totalAmount || 0), 0);
-    
+
     const totalDebtCollected = debtTransactions
       .filter(t => t.status === 'completed' && t.debtPaid)
       .reduce((sum, t) => sum + (t.totalAmount || 0), 0);
-    
+
     // Product sales summary
     const productSales = {};
     completedTransactions.forEach(transaction => {
       transaction.items.forEach(item => {
         const productName = item.productName;
         const quantity = item.quantity;
-        
+
         if (productSales[productName]) {
           productSales[productName].quantity += quantity;
           productSales[productName].revenue += item.totalPrice;
@@ -220,11 +220,11 @@ export const getDailyReportByBusiness = async (req, res) => {
         }
       });
     });
-    
+
     const topProducts = Object.values(productSales)
       .sort((a, b) => b.quantity - a.quantity)
       .slice(0, 5);
-    
+
     res.json({
       success: true,
       date,
@@ -238,7 +238,7 @@ export const getDailyReportByBusiness = async (req, res) => {
         debtTransactions: debtTransactions.length,
         outstandingDebt,
         totalDebtCollected,
-        debtRecoveryRate: debtTransactions.length > 0 
+        debtRecoveryRate: debtTransactions.length > 0
           ? ((debtTransactions.filter(t => t.status === 'completed' && t.debtPaid).length / debtTransactions.length) * 100).toFixed(1)
           : 0,
         topProducts
@@ -258,11 +258,11 @@ export const getDailyReportByBusiness = async (req, res) => {
 export const getAllTransactions = async (req, res) => {
   try {
     const { limit = 100 } = req.query;
-    
+
     const transactions = await Transaction.find({})
       .sort({ timestamp: -1 })
       .limit(parseInt(limit));
-    
+
     res.json({
       success: true,
       transactions,
@@ -279,6 +279,7 @@ export const getAllTransactions = async (req, res) => {
 };
 
 // Update transaction (for debt payment)
+// In TransactionController.js - update the updateTransaction function
 export const updateTransaction = async (req, res) => {
   try {
     const { id } = req.params;
@@ -291,7 +292,7 @@ export const updateTransaction = async (req, res) => {
 
     // Find the transaction
     const transaction = await Transaction.findById(id);
-    
+
     if (!transaction) {
       return res.status(404).json({
         success: false,
@@ -308,20 +309,26 @@ export const updateTransaction = async (req, res) => {
       debtPaid: transaction.debtPaid
     });
 
-    // Validate that this is a debt transaction
-    if (transaction.type !== 'debt' && transaction.paymentMethod !== 'debt' && !transaction.originalPaymentMethod) {
-      return res.status(400).json({
-        success: false,
-        message: 'Only debt transactions can be updated for payment'
-      });
-    }
+    // FIX: Allow updates for ALL transaction types, not just debt
+    // Remove this restriction:
+    // if (transaction.type !== 'debt' && transaction.paymentMethod !== 'debt' && !transaction.originalPaymentMethod) {
+    //   return res.status(400).json({
+    //     success: false,
+    //     message: 'Only debt transactions can be updated for payment'
+    //   });
+    // }
 
-    // Check if already paid
-    if (transaction.status === 'completed' && transaction.debtPaid) {
-      return res.status(400).json({
-        success: false,
-        message: 'This debt has already been paid'
-      });
+    // Instead, allow updates for all transaction types
+    const isDebtTransaction = transaction.type === 'debt' || transaction.paymentMethod === 'debt';
+
+    if (isDebtTransaction) {
+      // For debt transactions, check if already paid
+      if (transaction.status === 'completed' && transaction.debtPaid) {
+        return res.status(400).json({
+          success: false,
+          message: 'This debt has already been paid'
+        });
+      }
     }
 
     // Normalize payment method to lowercase
@@ -333,7 +340,7 @@ export const updateTransaction = async (req, res) => {
     if (updateData.status) {
       updateData.status = updateData.status.toLowerCase();
     }
-    
+
     if (updateData.paymentStatus) {
       updateData.paymentStatus = updateData.paymentStatus.toLowerCase();
     }
@@ -343,40 +350,65 @@ export const updateTransaction = async (req, res) => {
     }
 
     // Get the payment date - prioritize what's sent from frontend
-    const paymentDate = updateData.datePaid || 
-                       updateData.paidAt || 
-                       updateData.paymentDate || 
-                       updateData.completedAt || 
-                       new Date();
+    const paymentDate = updateData.datePaid ||
+      updateData.paidAt ||
+      updateData.paymentDate ||
+      updateData.completedAt ||
+      new Date();
 
     console.log('💰 Payment date determined:', paymentDate);
 
-    // Store original payment method before it becomes a regular payment
-    const originalPaymentMethod = transaction.originalPaymentMethod || transaction.paymentMethod;
-
-    // Prepare update data - set ALL payment date fields
+    // Prepare update data
     const updates = {
-      status: 'completed',
-      paymentStatus: 'paid',
-      debtPaid: true,
-      originalPaymentMethod: originalPaymentMethod,
-      datePaid: paymentDate,
-      paidAt: paymentDate,
-      paymentDate: paymentDate,
-      completedAt: paymentDate,
       updatedAt: new Date(),
       ...updateData
     };
 
-    // If payment details are provided, store them
-    if (updateData.paymentDetails) {
-      updates.paymentDetails = updateData.paymentDetails;
+    // Handle specific update types
+    if (isDebtTransaction) {
+      // For debt transactions
+      updates.status = 'completed';
+      updates.paymentStatus = 'paid';
+      updates.debtPaid = true;
+      updates.originalPaymentMethod = transaction.originalPaymentMethod || transaction.paymentMethod;
+
+      // Set debt payment method if provided
+      if (updateData.debtPaymentMethod) {
+        updates.debtPaymentMethod = updateData.debtPaymentMethod;
+        updates.debtPaymentDate = paymentDate;
+      }
+    } else if (transaction.paymentMethod === 'mpesa') {
+      // For MPesa transactions
+      if (updateData.status === 'completed' || updateData.paymentStatus === 'paid') {
+        updates.datePaid = paymentDate;
+        updates.paidAt = paymentDate;
+        updates.paymentDate = paymentDate;
+        updates.completedAt = paymentDate;
+      }
+    } else if (transaction.paymentMethod === 'cash') {
+      // For cash transactions
+      if (updateData.status === 'completed' || updateData.paymentStatus === 'paid') {
+        updates.datePaid = paymentDate;
+        updates.paidAt = paymentDate;
+        updates.paymentDate = paymentDate;
+        updates.completedAt = paymentDate;
+      }
     }
 
-    // If debt payment method is provided, store it
-    if (updateData.debtPaymentMethod) {
-      updates.debtPaymentMethod = updateData.debtPaymentMethod;
-      updates.debtPaymentDate = paymentDate;
+    // Set all payment date fields if transaction is being marked as completed
+    if (updates.status === 'completed' || updates.paymentStatus === 'paid') {
+      updates.datePaid = updates.datePaid || paymentDate;
+      updates.paidAt = updates.paidAt || paymentDate;
+      updates.paymentDate = updates.paymentDate || paymentDate;
+      updates.completedAt = updates.completedAt || paymentDate;
+    }
+
+    // If payment details are provided, store them
+    if (updateData.paymentDetails) {
+      updates.paymentDetails = {
+        ...(transaction.paymentDetails || {}),
+        ...updateData.paymentDetails
+      };
     }
 
     console.log('📤 Updating with:', updates);
@@ -400,12 +432,12 @@ export const updateTransaction = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Debt payment recorded successfully',
+      message: isDebtTransaction ? 'Debt payment recorded successfully' : 'Transaction updated successfully',
       transaction: updatedTransaction
     });
   } catch (error) {
     console.error('❌ Error updating transaction:', error);
-    
+
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map(err => err.message);
       return res.status(400).json({
@@ -418,6 +450,115 @@ export const updateTransaction = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to update transaction',
+      error: error.message
+    });
+  }
+};
+
+export const getTransactionByTransactionId = async (req, res) => {
+  try {
+    const { transactionId } = req.params;
+
+    console.log('🔍 Looking for transaction by transactionId:', transactionId);
+
+    if (!transactionId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transaction ID is required'
+      });
+    }
+
+    // Find transaction by transactionId (not MongoDB _id)
+    const transaction = await Transaction.findOne({
+      transactionId: transactionId
+    });
+
+    if (!transaction) {
+      console.log('❌ Transaction not found:', transactionId);
+      return res.status(404).json({
+        success: false,
+        message: 'Transaction not found'
+      });
+    }
+
+    console.log('✅ Transaction found:', transactionId);
+
+    res.status(200).json({
+      success: true,
+      transaction: transaction
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching transaction by transactionId:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error fetching transaction',
+      error: error.message
+    });
+  }
+};
+// Add this function to TransactionController.js
+export const updateMpesaTransaction = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+
+    console.log('📱 Updating MPesa transaction:', {
+      id,
+      updateData
+    });
+
+    // Find the transaction
+    const transaction = await Transaction.findById(id);
+    
+    if (!transaction) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transaction not found'
+      });
+    }
+
+    // Verify this is an MPesa transaction
+    if (transaction.paymentMethod !== 'mpesa') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only MPesa transactions can be updated with this endpoint'
+      });
+    }
+
+    const updates = {
+      ...updateData,
+      updatedAt: new Date()
+    };
+
+    // If marking as completed, set payment dates
+    if (updates.status === 'completed' || updates.paymentStatus === 'paid') {
+      const paymentDate = new Date();
+      updates.datePaid = paymentDate;
+      updates.paidAt = paymentDate;
+      updates.paymentDate = paymentDate;
+      updates.completedAt = paymentDate;
+    }
+
+    const updatedTransaction = await Transaction.findByIdAndUpdate(
+      id,
+      { $set: updates },
+      { new: true }
+    );
+
+    console.log('✅ MPesa transaction updated:', updatedTransaction.transactionId);
+
+    res.json({
+      success: true,
+      message: 'MPesa transaction updated successfully',
+      transaction: updatedTransaction
+    });
+
+  } catch (error) {
+    console.error('❌ Error updating MPesa transaction:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update MPesa transaction',
       error: error.message
     });
   }
