@@ -278,8 +278,6 @@ export const getAllTransactions = async (req, res) => {
   }
 };
 
-// Update transaction (for debt payment)
-// In TransactionController.js - update the updateTransaction function
 export const updateTransaction = async (req, res) => {
   try {
     const { id } = req.params;
@@ -309,20 +307,17 @@ export const updateTransaction = async (req, res) => {
       debtPaid: transaction.debtPaid
     });
 
-    // FIX: Allow updates for ALL transaction types, not just debt
-    // Remove this restriction:
-    // if (transaction.type !== 'debt' && transaction.paymentMethod !== 'debt' && !transaction.originalPaymentMethod) {
-    //   return res.status(400).json({
-    //     success: false,
-    //     message: 'Only debt transactions can be updated for payment'
-    //   });
-    // }
+    // FIX: Check if this is an M-PESA payment initiation (pending status)
+    const isMpesaInitiation =
+      updateData.paymentMethod === 'mpesa' &&
+      updateData.paymentStatus === 'pending' &&
+      updateData.paymentDetails?.status === 'pending';
 
-    // Instead, allow updates for all transaction types
+    // For debt transactions, only block if they're trying to mark as completed AND already paid
     const isDebtTransaction = transaction.type === 'debt' || transaction.paymentMethod === 'debt';
 
-    if (isDebtTransaction) {
-      // For debt transactions, check if already paid
+    if (isDebtTransaction && !isMpesaInitiation) {
+      // Only check for already paid if this is NOT an M-PESA initiation
       if (transaction.status === 'completed' && transaction.debtPaid) {
         return res.status(400).json({
           success: false,
@@ -365,8 +360,8 @@ export const updateTransaction = async (req, res) => {
     };
 
     // Handle specific update types
-    if (isDebtTransaction) {
-      // For debt transactions
+    if (isDebtTransaction && !isMpesaInitiation) {
+      // For debt transactions completing payment (not M-PESA initiation)
       updates.status = 'completed';
       updates.paymentStatus = 'paid';
       updates.debtPaid = true;
@@ -377,16 +372,8 @@ export const updateTransaction = async (req, res) => {
         updates.debtPaymentMethod = updateData.debtPaymentMethod;
         updates.debtPaymentDate = paymentDate;
       }
-    } else if (transaction.paymentMethod === 'mpesa') {
-      // For MPesa transactions
-      if (updateData.status === 'completed' || updateData.paymentStatus === 'paid') {
-        updates.datePaid = paymentDate;
-        updates.paidAt = paymentDate;
-        updates.paymentDate = paymentDate;
-        updates.completedAt = paymentDate;
-      }
-    } else if (transaction.paymentMethod === 'cash') {
-      // For cash transactions
+    } else if (transaction.paymentMethod === 'mpesa' || updateData.paymentMethod === 'mpesa') {
+      // For MPesa transactions (including debt payments via M-PESA)
       if (updateData.status === 'completed' || updateData.paymentStatus === 'paid') {
         updates.datePaid = paymentDate;
         updates.paidAt = paymentDate;
@@ -417,7 +404,7 @@ export const updateTransaction = async (req, res) => {
     const updatedTransaction = await Transaction.findByIdAndUpdate(
       id,
       { $set: updates },
-      { new: true, runValidators: false } // Disable validators to allow flexible updates
+      { new: true, runValidators: false }
     );
 
     console.log('✅ Transaction updated:', {
@@ -437,16 +424,6 @@ export const updateTransaction = async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error updating transaction:', error);
-
-    if (error.name === 'ValidationError') {
-      const messages = Object.values(error.errors).map(err => err.message);
-      return res.status(400).json({
-        success: false,
-        message: 'Update validation failed',
-        errors: messages
-      });
-    }
-
     res.status(500).json({
       success: false,
       message: 'Failed to update transaction',
@@ -510,7 +487,7 @@ export const updateMpesaTransaction = async (req, res) => {
 
     // Find the transaction
     const transaction = await Transaction.findById(id);
-    
+
     if (!transaction) {
       return res.status(404).json({
         success: false,

@@ -15,7 +15,7 @@ export default function AuthRoutes(storage) {
     const createTransporter = () => {
         const emailUser = process.env.EMAIL_USER;
         const emailPass = process.env.EMAIL_PASS;
-        
+
         if (!emailUser || !emailPass) {
             console.error('EMAIL CREDENTIALS MISSING: EMAIL_USER and EMAIL_PASS must be set in environment variables');
             return null;
@@ -58,8 +58,8 @@ export default function AuthRoutes(storage) {
     const sendOTPEmail = async (email, otp, type = 'login') => {
         // Check if email is configured
         if (!transporter || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-            return { 
-                success: false, 
+            return {
+                success: false,
                 devMode: true,
                 error: "Email service not configured. Set EMAIL_USER and EMAIL_PASS environment variables."
             };
@@ -126,15 +126,15 @@ export default function AuthRoutes(storage) {
             });
 
             const info = await Promise.race([sendPromise, timeoutPromise]);
-            
-            return { 
+
+            return {
                 success: true,
                 messageId: info.messageId
             };
 
         } catch (error) {
             console.error('Email sending failed:', error.message);
-            
+
             // Return dev mode if email fails
             return {
                 success: false,
@@ -147,25 +147,25 @@ export default function AuthRoutes(storage) {
     // ==================== HELPER: CHECK BUSINESS STATUS ====================
     const checkBusinessStatus = async (businessId) => {
         if (!businessId) {
-            return { 
-                isActive: true, 
-                message: 'No business associated' 
+            return {
+                isActive: true,
+                message: 'No business associated'
             };
         }
 
         try {
             const business = await storage.getBusiness(businessId);
-            
+
             if (!business) {
-                return { 
-                    isActive: false, 
-                    message: 'Business not found' 
+                return {
+                    isActive: false,
+                    message: 'Business not found'
                 };
             }
 
             const businessStatus = business.status ? business.status.toLowerCase() : 'active';
             const isActive = !['inactive', 'disabled', 'suspended'].includes(businessStatus);
-            
+
             return {
                 isActive,
                 businessStatus,
@@ -174,9 +174,9 @@ export default function AuthRoutes(storage) {
             };
         } catch (error) {
             console.error('Error checking business status:', error);
-            return { 
-                isActive: false, 
-                message: 'Error checking business status' 
+            return {
+                isActive: false,
+                message: 'Error checking business status'
             };
         }
     };
@@ -211,7 +211,7 @@ export default function AuthRoutes(storage) {
             // Check user's business status BEFORE allowing login
             const businessId = user.associatedBusinessId || user.institutionId;
             const businessStatusCheck = await checkBusinessStatus(businessId);
-            
+
             if (!businessStatusCheck.isActive) {
                 return res.status(403).json({
                     success: false,
@@ -328,7 +328,7 @@ export default function AuthRoutes(storage) {
                     userAgent: req.headers['user-agent']
                 }
             );
-            
+
             if (!storedOTP) {
                 return res.status(400).json({
                     success: false,
@@ -350,10 +350,10 @@ export default function AuthRoutes(storage) {
             // Get user
             const user = await storage.getUserByEmail(email);
             const businessId = user.associatedBusinessId || user.institutionId;
-            
+
             // Check business status AGAIN before issuing token
             const businessStatusCheck = await checkBusinessStatus(businessId);
-            
+
             if (!businessStatusCheck.isActive) {
                 return res.status(403).json({
                     success: false,
@@ -364,7 +364,7 @@ export default function AuthRoutes(storage) {
             }
 
             const business = businessStatusCheck.business || await storage.getBusiness(businessId);
-            
+
             if (!business) {
                 return res.status(404).json({
                     success: false,
@@ -401,7 +401,7 @@ export default function AuthRoutes(storage) {
                 businessStatus: business.status || 'active'
             };
 
-            const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '24h' });
+            const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '1h' });
 
             // Update last login
             await storage.updateUserLastLogin(user.id);
@@ -410,7 +410,8 @@ export default function AuthRoutes(storage) {
                 success: true,
                 message: "Login successful",
                 user: cleanUser,
-                token: token
+                token: token,
+                expiresIn: 3600
             });
 
         } catch (error) {
@@ -446,7 +447,7 @@ export default function AuthRoutes(storage) {
             // Check business status before resending OTP
             const businessId = user.associatedBusinessId || user.institutionId;
             const businessStatusCheck = await checkBusinessStatus(businessId);
-            
+
             if (!businessStatusCheck.isActive) {
                 return res.status(403).json({
                     success: false,
@@ -520,7 +521,7 @@ export default function AuthRoutes(storage) {
             // Check business status before allowing password reset
             const businessId = user.associatedBusinessId || user.institutionId;
             const businessStatusCheck = await checkBusinessStatus(businessId);
-            
+
             if (!businessStatusCheck.isActive) {
                 return res.status(403).json({
                     success: false,
@@ -586,7 +587,7 @@ export default function AuthRoutes(storage) {
                 ipAddress: req.ip,
                 userAgent: req.headers['user-agent']
             });
-            
+
             if (!storedOTP) {
                 return res.status(400).json({
                     success: false,
@@ -672,7 +673,7 @@ export default function AuthRoutes(storage) {
             // Check business status before allowing password reset
             const businessId = user.associatedBusinessId || user.institutionId;
             const businessStatusCheck = await checkBusinessStatus(businessId);
-            
+
             if (!businessStatusCheck.isActive) {
                 return res.status(403).json({
                     success: false,
