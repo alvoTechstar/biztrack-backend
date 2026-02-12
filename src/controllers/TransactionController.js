@@ -307,18 +307,21 @@ export const updateTransaction = async (req, res) => {
       debtPaid: transaction.debtPaid
     });
 
-    // FIX: Check if this is an M-PESA payment initiation (pending status)
+    // CRITICAL: Check if this is a debt payment completion
+    const isDebtPaymentCompletion =
+      transaction.type === 'debt' &&
+      updateData.debtPaid === true;
+
+    // For MPESA debt payment initiation (first step)
     const isMpesaInitiation =
       updateData.paymentMethod === 'mpesa' &&
       updateData.paymentStatus === 'pending' &&
-      updateData.paymentDetails?.status === 'pending';
+      updateData.status === 'pending';
 
     // For debt transactions, only block if they're trying to mark as completed AND already paid
-    const isDebtTransaction = transaction.type === 'debt' || transaction.paymentMethod === 'debt';
-
-    if (isDebtTransaction && !isMpesaInitiation) {
+    if (transaction.type === 'debt' && !isMpesaInitiation) {
       // Only check for already paid if this is NOT an M-PESA initiation
-      if (transaction.status === 'completed' && transaction.debtPaid) {
+      if (transaction.status === 'completed' && transaction.debtPaid === true) {
         return res.status(400).json({
           success: false,
           message: 'This debt has already been paid'
@@ -344,7 +347,7 @@ export const updateTransaction = async (req, res) => {
       updateData.debtPaymentMethod = updateData.debtPaymentMethod.toLowerCase();
     }
 
-    // Get the payment date - prioritize what's sent from frontend
+    // Get the payment date
     const paymentDate = updateData.datePaid ||
       updateData.paidAt ||
       updateData.paymentDate ||
@@ -359,35 +362,38 @@ export const updateTransaction = async (req, res) => {
       ...updateData
     };
 
-    // Handle specific update types
-    if (isDebtTransaction && !isMpesaInitiation) {
-      // For debt transactions completing payment (not M-PESA initiation)
+    // Handle debt payment completion
+    if (isDebtPaymentCompletion) {
+      console.log('💰 PROCESSING DEBT PAYMENT COMPLETION - NO STOCK UPDATE NEEDED');
+
       updates.status = 'completed';
       updates.paymentStatus = 'paid';
       updates.debtPaid = true;
-      updates.originalPaymentMethod = transaction.originalPaymentMethod || transaction.paymentMethod;
 
       // Set debt payment method if provided
       if (updateData.debtPaymentMethod) {
         updates.debtPaymentMethod = updateData.debtPaymentMethod;
+      }
+
+      // Set payment dates
+      updates.datePaid = paymentDate;
+      updates.paidAt = paymentDate;
+      updates.paymentDate = paymentDate;
+      updates.completedAt = paymentDate;
+    }
+    // Handle M-PESA transaction completion
+    else if (transaction.paymentMethod === 'mpesa' && updateData.status === 'completed') {
+      updates.datePaid = paymentDate;
+      updates.paidAt = paymentDate;
+      updates.paymentDate = paymentDate;
+      updates.completedAt = paymentDate;
+
+      // If this is a debt being paid via M-PESA, mark it as paid
+      if (transaction.type === 'debt') {
+        updates.debtPaid = true;
+        updates.debtPaymentMethod = 'mpesa';
         updates.debtPaymentDate = paymentDate;
       }
-    } else if (transaction.paymentMethod === 'mpesa' || updateData.paymentMethod === 'mpesa') {
-      // For MPesa transactions (including debt payments via M-PESA)
-      if (updateData.status === 'completed' || updateData.paymentStatus === 'paid') {
-        updates.datePaid = paymentDate;
-        updates.paidAt = paymentDate;
-        updates.paymentDate = paymentDate;
-        updates.completedAt = paymentDate;
-      }
-    }
-
-    // Set all payment date fields if transaction is being marked as completed
-    if (updates.status === 'completed' || updates.paymentStatus === 'paid') {
-      updates.datePaid = updates.datePaid || paymentDate;
-      updates.paidAt = updates.paidAt || paymentDate;
-      updates.paymentDate = updates.paymentDate || paymentDate;
-      updates.completedAt = updates.completedAt || paymentDate;
     }
 
     // If payment details are provided, store them
@@ -412,14 +418,14 @@ export const updateTransaction = async (req, res) => {
       transactionId: updatedTransaction.transactionId,
       status: updatedTransaction.status,
       paymentMethod: updatedTransaction.paymentMethod,
+      type: updatedTransaction.type,
       debtPaid: updatedTransaction.debtPaid,
-      datePaid: updatedTransaction.datePaid,
-      paidAt: updatedTransaction.paidAt
+      datePaid: updatedTransaction.datePaid
     });
 
     res.json({
       success: true,
-      message: isDebtTransaction ? 'Debt payment recorded successfully' : 'Transaction updated successfully',
+      message: transaction.type === 'debt' ? 'Debt payment recorded successfully' : 'Transaction updated successfully',
       transaction: updatedTransaction
     });
   } catch (error) {
