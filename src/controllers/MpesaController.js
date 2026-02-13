@@ -1,10 +1,6 @@
-// MpesaController.js - FIXED & ENHANCED VERSION
 import { mpesaService } from '../services/mpesaService.js';
 import Transaction from '../models/Transaction.js';
 import Product from '../models/Product.js';
-
-// WebSocket/EventEmitter for real-time updates (if you're using Socket.io)
-// import { io } from '../server.js'; // Uncomment if using Socket.io
 
 // Helper function to update stock
 const updateProductStock = async (transaction) => {
@@ -66,9 +62,14 @@ const updateProductStock = async (transaction) => {
 // @access  Private
 export const initiateStkPush = async (req, res) => {
   try {
-    const { phone, amount, transactionId, description } = req.body;
+    const { phone, amount, transactionId, description, isDebtPayment } = req.body;
 
-    console.log('📥 STK Push Request:', { phone, amount, transactionId });
+    console.log('📥 STK Push Request:', { 
+      phone, 
+      amount, 
+      transactionId, 
+      isDebtPayment: isDebtPayment || false 
+    });
 
     // Validate required fields
     if (!phone || !amount || !transactionId) {
@@ -159,7 +160,8 @@ export const initiateStkPush = async (req, res) => {
       phone: formattedPhone,
       amount: amountNumber,
       transactionId,
-      accountReference
+      accountReference,
+      isDebtPayment: isDebtPayment || false
     });
 
     // Send STK Push
@@ -184,6 +186,8 @@ export const initiateStkPush = async (req, res) => {
           customerPhone: formattedPhone,
           checkoutRequestId: mpesaResponse.CheckoutRequestID,
           merchantRequestId: mpesaResponse.MerchantRequestID,
+          // Store the debt payment flag in the transaction
+          isDebtRepayment: isDebtPayment === true,
           paymentDetails: {
             checkoutRequestId: mpesaResponse.CheckoutRequestID,
             merchantRequestId: mpesaResponse.MerchantRequestID,
@@ -191,7 +195,8 @@ export const initiateStkPush = async (req, res) => {
             amount: amountNumber,
             stkResponse: mpesaResponse,
             initiatedAt: new Date(),
-            description: finalDescription
+            description: finalDescription,
+            isDebtRepayment: isDebtPayment === true
           },
           errorMessage: null
         },
@@ -200,7 +205,8 @@ export const initiateStkPush = async (req, res) => {
 
       console.log('✅ STK Push successful:', {
         transactionId,
-        checkoutRequestId: mpesaResponse.CheckoutRequestID
+        checkoutRequestId: mpesaResponse.CheckoutRequestID,
+        isDebtRepayment: isDebtPayment === true
       });
 
       return res.status(200).json({
@@ -214,6 +220,7 @@ export const initiateStkPush = async (req, res) => {
           amount: amountNumber,
           transactionId: transactionId,
           status: 'pending',
+          isDebtRepayment: isDebtPayment === true,
           // For frontend polling
           pollEndpoint: `/api/mpesa/status/${mpesaResponse.CheckoutRequestID}`
         }
@@ -341,7 +348,12 @@ export const handleCallback = async (req, res) => {
       });
     }
 
-    console.log(`🔍 Found transaction: ${transaction.transactionId}`);
+    console.log(`🔍 Found transaction: ${transaction.transactionId}`, {
+      type: transaction.type,
+      paymentMethod: transaction.paymentMethod,
+      isDebtRepayment: transaction.isDebtRepayment || false,
+      debtPaid: transaction.debtPaid
+    });
 
     // Check if already processed
     if (transaction.status === 'completed' && transaction.paymentStatus === 'paid') {
@@ -385,6 +397,33 @@ export const handleCallback = async (req, res) => {
         errorMessage: null
       };
 
+      // ✅ CRITICAL: Check if this is a debt repayment
+      const isDebtRepayment = 
+        transaction.type === 'debt' || 
+        transaction.paymentMethod === 'debt' ||
+        transaction.transactionType === 'debt' ||
+        transaction.isDebtRepayment === true ||
+        transaction.paymentDetails?.isDebtRepayment === true;
+
+      // If this is a debt repayment, mark debt as paid
+      if (isDebtRepayment) {
+        updateData.debtPaid = true;
+        updateData.debtPaymentMethod = 'mpesa';
+        updateData.debtPaymentDate = new Date();
+        
+        // Add skip stock update flag
+        updateData.skipStockUpdate = true;
+        
+        // Update payment details
+        updateData.paymentDetails = {
+          ...updateData.paymentDetails,
+          isDebtRepayment: true,
+          stockUpdated: false,
+          stockUpdateSkipped: true,
+          reason: 'Debt payment - stock already updated during original sale'
+        };
+      }
+
       // Update transaction
       const updatedTransaction = await Transaction.findByIdAndUpdate(
         transaction._id,
@@ -392,21 +431,45 @@ export const handleCallback = async (req, res) => {
         { new: true }
       );
 
-      console.log(`✅ Transaction ${transaction.transactionId} marked as completed`);
+      console.log(`✅ Transaction ${transaction.transactionId} marked as completed`, {
+        isDebtRepayment,
+        debtPaid: updatedTransaction.debtPaid,
+        skipStockUpdate: updatedTransaction.skipStockUpdate
+      });
 
-      // Update stock
-      try {
-        const stockUpdateResult = await updateProductStock(updatedTransaction);
-        console.log(`📦 Stock updated:`, stockUpdateResult.message);
+      // ✅ CRITICAL FIX: Only update stock if this is NOT a debt repayment
+      if (isDebtRepayment) {
+        console.log('💰 Processing DEBT REPAYMENT - SKIPPING stock update (stock already updated during original sale)');
         
-        // Update transaction with stock update info
+        // Update transaction with skip info
         await Transaction.findByIdAndUpdate(transaction._id, {
-          'paymentDetails.stockUpdated': true,
-          'paymentDetails.stockUpdateResult': stockUpdateResult
+          'paymentDetails.stockUpdated': false,
+          'paymentDetails.stockUpdateSkipped': true,
+          'paymentDetails.skipReason': 'Debt repayment - stock already updated',
+          'paymentDetails.skipTimestamp': new Date()
         });
-      } catch (stockError) {
-        console.error(`❌ Stock update error:`, stockError);
-        // Don't fail the callback - just log the error
+      } else {
+        // Regular sale - UPDATE STOCK
+        console.log('💰 Processing regular sale - UPDATING stock');
+        try {
+          const stockUpdateResult = await updateProductStock(updatedTransaction);
+          console.log(`📦 Stock updated:`, stockUpdateResult.message);
+          
+          // Update transaction with stock update info
+          await Transaction.findByIdAndUpdate(transaction._id, {
+            'paymentDetails.stockUpdated': true,
+            'paymentDetails.stockUpdateResult': stockUpdateResult,
+            'paymentDetails.stockUpdateTimestamp': new Date()
+          });
+        } catch (stockError) {
+          console.error(`❌ Stock update error:`, stockError);
+          // Don't fail the callback - just log the error
+          await Transaction.findByIdAndUpdate(transaction._id, {
+            'paymentDetails.stockUpdated': false,
+            'paymentDetails.stockUpdateError': stockError.message,
+            'paymentDetails.stockUpdateTimestamp': new Date()
+          });
+        }
       }
 
       // Emit real-time event if using WebSockets
@@ -415,6 +478,7 @@ export const handleCallback = async (req, res) => {
       //     status: 'completed',
       //     receipt: mpesaReceiptNumber,
       //     transactionId: transaction.transactionId,
+      //     isDebtRepayment,
       //     timestamp: new Date()
       //   });
       // }
@@ -495,7 +559,10 @@ export const getTransactionByTransactionId = async (req, res) => {
       transactionId: transaction.transactionId,
       status: transaction.status,
       paymentStatus: transaction.paymentStatus,
-      paymentMethod: transaction.paymentMethod
+      paymentMethod: transaction.paymentMethod,
+      type: transaction.type,
+      isDebtRepayment: transaction.isDebtRepayment || false,
+      debtPaid: transaction.debtPaid
     });
 
     res.status(200).json({
@@ -547,7 +614,8 @@ export const checkPaymentStatus = async (req, res) => {
         success: true,
         transaction: transaction,
         mpesaStatus: queryResponse,
-        needsAction: transaction.status === 'pending' && transaction.paymentStatus === 'pending'
+        needsAction: transaction.status === 'pending' && transaction.paymentStatus === 'pending',
+        isDebtRepayment: transaction.isDebtRepayment || false
       });
     } catch (queryError) {
       // If query fails, just return current transaction status
@@ -557,7 +625,8 @@ export const checkPaymentStatus = async (req, res) => {
         success: true,
         transaction: transaction,
         mpesaStatus: null,
-        message: 'Using local transaction status'
+        message: 'Using local transaction status',
+        isDebtRepayment: transaction.isDebtRepayment || false
       });
     }
 
@@ -599,6 +668,8 @@ export const pollTransactionStatus = async (req, res) => {
       checkoutRequestId: transaction.checkoutRequestId,
       amountPaid: transaction.amountPaid,
       errorMessage: transaction.errorMessage,
+      isDebtRepayment: transaction.isDebtRepayment || false,
+      debtPaid: transaction.debtPaid,
       timestamp: new Date()
     });
 

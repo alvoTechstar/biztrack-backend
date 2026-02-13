@@ -278,6 +278,7 @@ export const getAllTransactions = async (req, res) => {
   }
 };
 
+// Inside updateTransaction function, before processing:
 export const updateTransaction = async (req, res) => {
   try {
     const { id } = req.params;
@@ -306,6 +307,12 @@ export const updateTransaction = async (req, res) => {
       type: transaction.type,
       debtPaid: transaction.debtPaid
     });
+
+    // ✅ CRITICAL FIX: Check for explicit skipStockUpdate flag
+    const shouldSkipStockUpdate =
+      updateData.skipStockUpdate === true ||
+      updateData.isDebtPaymentCompletion === true ||
+      (transaction.type === 'debt' && updateData.debtPaid === true);
 
     // CRITICAL: Check if this is a debt payment completion
     const isDebtPaymentCompletion =
@@ -362,6 +369,12 @@ export const updateTransaction = async (req, res) => {
       ...updateData
     };
 
+    // ✅ Store the skip stock update flag in the update
+    if (shouldSkipStockUpdate) {
+      updates.skipStockUpdate = true;
+      updates.isDebtPaymentCompletion = true;
+    }
+
     // Handle debt payment completion
     if (isDebtPaymentCompletion) {
       console.log('💰 PROCESSING DEBT PAYMENT COMPLETION - NO STOCK UPDATE NEEDED');
@@ -380,6 +393,15 @@ export const updateTransaction = async (req, res) => {
       updates.paidAt = paymentDate;
       updates.paymentDate = paymentDate;
       updates.completedAt = paymentDate;
+
+      // ✅ CRITICAL: Explicitly mark that stock should NOT be updated
+      updates.paymentDetails = {
+        ...(updateData.paymentDetails || {}),
+        isDebtRepayment: true,
+        stockUpdated: false,
+        stockUpdateSkipped: true,
+        reason: 'Debt payment - stock already updated during original sale'
+      };
     }
     // Handle M-PESA transaction completion
     else if (transaction.paymentMethod === 'mpesa' && updateData.status === 'completed') {
@@ -393,6 +415,14 @@ export const updateTransaction = async (req, res) => {
         updates.debtPaid = true;
         updates.debtPaymentMethod = 'mpesa';
         updates.debtPaymentDate = paymentDate;
+
+        // ✅ CRITICAL: Skip stock update for debt repayment
+        updates.paymentDetails = {
+          ...(updateData.paymentDetails || {}),
+          isDebtRepayment: true,
+          stockUpdated: false,
+          stockUpdateSkipped: true
+        };
       }
     }
 
@@ -400,7 +430,8 @@ export const updateTransaction = async (req, res) => {
     if (updateData.paymentDetails) {
       updates.paymentDetails = {
         ...(transaction.paymentDetails || {}),
-        ...updateData.paymentDetails
+        ...updateData.paymentDetails,
+        ...(updates.paymentDetails || {})
       };
     }
 
@@ -420,7 +451,9 @@ export const updateTransaction = async (req, res) => {
       paymentMethod: updatedTransaction.paymentMethod,
       type: updatedTransaction.type,
       debtPaid: updatedTransaction.debtPaid,
-      datePaid: updatedTransaction.datePaid
+      datePaid: updatedTransaction.datePaid,
+      skipStockUpdate: updatedTransaction.skipStockUpdate,
+      isDebtRepayment: updatedTransaction.paymentDetails?.isDebtRepayment
     });
 
     res.json({
