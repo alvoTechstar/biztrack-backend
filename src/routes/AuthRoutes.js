@@ -3,6 +3,7 @@ import express from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
+import { blacklistToken } from "../tokenBlacklist.js";
 
 export default function AuthRoutes(storage) {
     const router = express.Router();
@@ -388,7 +389,21 @@ export default function AuthRoutes(storage) {
                 businessType: business.businessType,
                 primaryColor: business.primaryColor,
                 logo: business.logoUrl,
-                businessStatus: business.status || 'active'
+                businessStatus: business.status || 'active',
+                // Add payment configurations with robust default handling
+                paymentConfig: {
+                    paymentType: business.paymentConfig?.paymentType || 'TILL',
+                    tillNumber: business.paymentConfig?.tillNumber || null,
+                    paybillNumber: business.paymentConfig?.paybillNumber || null,
+                    accountNumber: business.paymentConfig?.accountNumber || null,
+                    pochiNumber: business.paymentConfig?.pochiNumber || null
+                },
+                // Root level fields
+                paymentType: business.paymentConfig?.paymentType || 'TILL',
+                tillNumber: business.paymentConfig?.tillNumber || null,
+                paybillNumber: business.paymentConfig?.paybillNumber || null,
+                accountNumber: business.paymentConfig?.accountNumber || null,
+                pochiNumber: business.paymentConfig?.pochiNumber || null
             };
 
             // Create JWT token
@@ -571,6 +586,85 @@ export default function AuthRoutes(storage) {
         }
     });
 
+    // ==================== RESEND RESET OTP ENDPOINT ====================
+    router.post("/resend-reset-otp", async (req, res) => {
+        try {
+            const { email } = req.body;
+
+            if (!email) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Email is required"
+                });
+            }
+
+            const user = await storage.getUserByEmail(email);
+            if (!user) {
+                // Don't reveal whether the email exists
+                return res.json({
+                    success: true,
+                    message: "If the email exists, a new reset OTP has been sent"
+                });
+            }
+
+            const businessId = user.associatedBusinessId || user.institutionId;
+            const businessStatusCheck = await checkBusinessStatus(businessId);
+
+            if (!businessStatusCheck.isActive) {
+                return res.status(403).json({
+                    success: false,
+                    message: `Your business "${businessStatusCheck.businessName || 'account'}" has been ${businessStatusCheck.businessStatus}. Please contact your administrator.`,
+                    businessStatus: businessStatusCheck.businessStatus,
+                    code: "BUSINESS_DISABLED"
+                });
+            }
+
+            const recentAttempts = await storage.getRecentOTPAttempts(email, 10);
+            if (recentAttempts >= 3) {
+                return res.status(429).json({
+                    success: false,
+                    message: "Too many reset attempts. Please wait 10 minutes before trying again."
+                });
+            }
+
+            const otp = generateOTP();
+            const otpResult = await storage.createOTP(
+                email,
+                otp,
+                'reset',
+                user.id,
+                {
+                    ipAddress: req.ip,
+                    userAgent: req.headers['user-agent']
+                }
+            );
+
+            const emailResult = await sendOTPEmail(email, otp, 'reset');
+
+            const response = {
+                success: true,
+                message: emailResult.devMode
+                    ? `New reset OTP: ${otp} (Email service not configured)`
+                    : "New reset OTP sent to your email",
+                devMode: emailResult.devMode || false,
+                otpMasked: otpResult.maskedOtp
+            };
+
+            if (emailResult.devMode) {
+                response.otp = otp;
+            }
+
+            res.json(response);
+
+        } catch (error) {
+            console.error('Resend reset OTP error:', error.message);
+            res.status(500).json({
+                success: false,
+                message: "Unable to resend reset OTP"
+            });
+        }
+    });
+
     // ==================== VERIFY RESET OTP ENDPOINT ====================
     router.post("/verify-reset-otp", async (req, res) => {
         try {
@@ -715,6 +809,25 @@ export default function AuthRoutes(storage) {
                 success: false,
                 message: "Internal server error"
             });
+        }
+    });
+
+    // ==================== LOGOUT ENDPOINT ====================
+    router.post("/logout", async (req, res) => {
+        try {
+            const authHeader = req.headers['authorization'];
+            const token = authHeader?.split(' ')[1];
+
+            if (token) {
+                const decoded = jwt.decode(token); // decode without verify — token may still be valid
+                const expiresAtMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + 3600 * 1000;
+                blacklistToken(token, expiresAtMs);
+            }
+
+            res.json({ success: true, message: "Logged out successfully" });
+        } catch (error) {
+            console.error('Logout error:', error.message);
+            res.status(500).json({ success: false, message: "Logout failed" });
         }
     });
 

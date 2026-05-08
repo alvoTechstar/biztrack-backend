@@ -2,9 +2,8 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import mongoose from "mongoose";
 import connectDB from "./db.js";
-import { MongoStorage } from "./mongoStorage.js";
+import { storage } from "./storage.js";
 import UserManagementRoutes from "./routes/UsermanagementRoutes.js";
 import AuthRoutes from "./routes/AuthRoutes.js";
 import BusinessRoutes from "./routes/BusinessRoutes.js";
@@ -35,19 +34,9 @@ const PORT = process.env.PORT || 3000;
 
 async function startServer() {
     try {
-        // Connect to database
+        // Connect to database (no-op for Prisma — connects lazily)
         await connectDB();
-
-        // Create MongoStorage instance
-        const storage = new MongoStorage();
         await storage.initialize();
-
-        console.log("✅ Storage methods available:", {
-            getBusinessByName: typeof storage.getBusinessByName,
-            createBusiness: typeof storage.createBusiness,
-            getUserByUsername: typeof storage.getUserByUsername,
-            createUser: typeof storage.createUser
-        });
 
         // Pass storage to all routes
         app.use("/api/users", UserManagementRoutes(storage));

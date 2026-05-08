@@ -1,4 +1,3 @@
-// src/schemas/index.js
 import { z } from "zod";
 
 // --- Custom validator for logo URL ---
@@ -7,16 +6,12 @@ const logoUrlSchema = z.string()
     (value) => {
       // Accept empty string
       if (value === '') return true;
-
       // Accept null
       if (value === null) return true;
-
       // Accept undefined
       if (value === undefined) return true;
-
       // Accept relative paths starting with /assets/logos/
       if (value.startsWith('/assets/logos/')) return true;
-
       // Accept absolute URLs
       try {
         new URL(value);
@@ -35,13 +30,13 @@ const logoUrlSchema = z.string()
 export const otpSchema = z.object({
   id: z.string().uuid().optional(),
   email: z.string().email("Invalid email format"),
-  originalOtp: z.string().length(6, "OTP must be 6 digits"), // Store original
-  maskedOtp: z.string().optional(), // Masked version for display
+  originalOtp: z.string().length(6, "OTP must be 6 digits"),
+  maskedOtp: z.string().optional(),
   type: z.enum(["login", "reset", "verification"]).default("login"),
   userId: z.string().uuid().optional().nullable(),
   expiresAt: z.date(),
-  status: z.enum(["pending", "consumed", "expired", "revoked"]).default("pending"), // Changed from 'used'
-  consumedAt: z.date().optional().nullable(), // Changed from 'usedAt'
+  status: z.enum(["pending", "consumed", "expired", "revoked"]).default("pending"),
+  consumedAt: z.date().optional().nullable(),
   attempts: z.number().int().min(0).default(0),
   ipAddress: z.string().optional(),
   userAgent: z.string().optional(),
@@ -54,7 +49,7 @@ export const insertOTPSchema = otpSchema.omit({
   createdAt: true,
   updatedAt: true,
 }).extend({
-  expiresAt: z.date().optional().default(() => new Date(Date.now() + 10 * 60 * 1000)), // 10 minutes
+  expiresAt: z.date().optional().default(() => new Date(Date.now() + 10 * 60 * 1000)),
 });
 
 export const updateOTPSchema = otpSchema.partial().extend({
@@ -64,7 +59,6 @@ export const updateOTPSchema = otpSchema.partial().extend({
 export const OTP = otpSchema;
 export const InsertOTP = insertOTPSchema;
 export const UpdateOTP = updateOTPSchema;
-
 
 // ==================== USER SCHEMA ====================
 export const userSchema = z.object({
@@ -83,15 +77,12 @@ export const userSchema = z.object({
     "Restaurant_Admin", "Restaurant_Manager", "Restaurant_Waiter", "Restaurant_Chef",
     "Retail_Admin", "Retail_Manager", "Retail_Cashier", "Retail_Sales_Associate",
   ]).default("Kiosk_Shopkeeper"),
-
   businessId: z.number().int().positive().optional(),
   businessUUID: z.string().uuid().optional(),
-
   businessName: z.string().optional(),
   associatedBusinessId: z.string().optional(),
   institutionId: z.string().optional(),
   institutionName: z.string().optional(),
-
   status: z.enum(["ACTIVE", "INACTIVE"]).default("ACTIVE"),
   permissions: z.array(z.string()).default(["read", "write", "delete"]),
   lastLogin: z.string().default("Never"),
@@ -115,8 +106,85 @@ export const User = userSchema;
 export const InsertUser = insertUserSchema;
 export const UpdateUser = updateUserSchema;
 
-// ==================== BUSINESS SCHEMA ====================
-export const businessSchema = z.object({
+// ==================== PAYMENT CONFIGURATION SCHEMA ====================
+// ==================== PAYMENT CONFIGURATION SCHEMA ====================
+export const paymentConfigSchema = z.object({
+  paymentType: z.enum(['TILL', 'PAYBILL', 'POCHI'], {
+    errorMap: () => ({ message: "Payment type must be TILL, PAYBILL, or POCHI" })
+  }).default('TILL'),
+
+  tillNumber: z.string()
+    .regex(/^\d{5,10}$/, "Till number must be 5-10 digits")
+    .optional()
+    .nullable()
+    .default(null),
+
+  paybillNumber: z.string()
+    .regex(/^\d{5,7}$/, "Paybill number must be 5-7 digits")
+    .optional()
+    .nullable()
+    .default(null),
+
+  accountNumber: z.string()
+    .max(50, "Account number must be at most 50 characters")
+    .optional()
+    .nullable()
+    .default(null),
+
+  pochiNumber: z.string()
+    .optional()
+    .nullable()
+    .default(null)
+    .transform((val) => {
+      if (!val) return null;
+      // Clean the number and convert to 254 format
+      let formatted = val.toString().replace(/\D/g, '');
+
+      // Handle different formats
+      if (formatted.startsWith('0') && formatted.length === 10) {
+        // 07XXXXXXXX or 01XXXXXXXX
+        formatted = '254' + formatted.substring(1);
+      } else if ((formatted.startsWith('7') || formatted.startsWith('1')) && formatted.length === 9) {
+        // 7XXXXXXXX or 1XXXXXXXX
+        formatted = '254' + formatted;
+      } else if (formatted.startsWith('254') && formatted.length === 12) {
+        // Already in 254 format
+        return formatted;
+      } else if (formatted.length === 9 && (formatted.startsWith('7') || formatted.startsWith('1'))) {
+        formatted = '254' + formatted;
+      }
+
+      // Validate final format
+      if (!/^254(7|1)\d{8}$/.test(formatted)) {
+        console.warn("⚠️ Invalid phone number format after transformation:", formatted);
+        return null;
+      }
+
+      return formatted;
+    }),
+}).refine(
+  (data) => {
+    // Skip validation if no payment type is set (for partial updates)
+    if (!data.paymentType) return true;
+
+    switch (data.paymentType) {
+      case 'TILL':
+        return !!data.tillNumber;
+      case 'PAYBILL':
+        return !!data.paybillNumber && !!data.accountNumber;
+      case 'POCHI':
+        return !!data.pochiNumber;
+      default:
+        return false;
+    }
+  },
+  {
+    message: "Required payment fields missing for selected payment type",
+    path: ["paymentType"]
+  }
+);
+// ==================== BASE BUSINESS SCHEMA (without transformations) ====================
+export const baseBusinessSchema = z.object({
   id: z.string().uuid().optional(),
   businessId: z.number().int().positive("Business ID must be a positive number"),
   businessName: z.string().min(1, "Business name is required"),
@@ -135,28 +203,124 @@ export const businessSchema = z.object({
     .default("#000000"),
   owner: z.string().min(1, "Owner is required"),
   status: z.enum(["active", "inactive", "new"]).default("new"),
+  paymentConfig: paymentConfigSchema.default({
+    paymentType: 'TILL',
+    tillNumber: null,
+    paybillNumber: null,
+    accountNumber: null,
+    pochiNumber: null
+  }),
   createdAt: z.date().default(() => new Date()),
   updatedAt: z.date().default(() => new Date()),
 });
 
-export const insertBusinessSchema = businessSchema.omit({
+// ==================== INSERT BUSINESS SCHEMA ====================
+export const insertBusinessSchema = baseBusinessSchema.omit({
   id: true,
   businessId: true,
   createdAt: true,
   updatedAt: true,
 }).extend({
   logoFile: z.any().optional(),
+  // Payment fields can be provided at root level for backward compatibility
+  paymentType: z.enum(['TILL', 'PAYBILL', 'POCHI']).optional(),
+  tillNumber: z.string().optional(),
+  paybillNumber: z.string().optional(),
+  accountNumber: z.string().optional(),
+  pochiNumber: z.string().optional(),
+}).transform((data) => {
+  // Transform root level payment fields into paymentConfig object
+  const {
+    paymentType, tillNumber, paybillNumber, accountNumber, pochiNumber,
+    ...rest
+  } = data;
+
+  // Build paymentConfig based on paymentType
+  let paymentConfig = {};
+
+  if (paymentType) {
+    // Create payment config with the provided fields
+    paymentConfig = {
+      paymentType,
+      tillNumber: tillNumber || null,
+      paybillNumber: paybillNumber || null,
+      accountNumber: accountNumber || null,
+      pochiNumber: pochiNumber || null
+    };
+
+    console.log("💰 Building paymentConfig from provided fields:", paymentConfig);
+  } else {
+    // Default payment config
+    paymentConfig = {
+      paymentType: 'TILL',
+      tillNumber: null,
+      paybillNumber: null,
+      accountNumber: null,
+      pochiNumber: null
+    };
+  }
+
+  // Return the rest of the data PLUS the paymentConfig
+  return {
+    ...rest,  // This includes all other fields like businessName, email, etc.
+    paymentConfig // Add the payment config
+  };
 });
 
-export const updateBusinessSchema = businessSchema.omit({
-  id: true,
-  businessId: true,
-  createdAt: true,
-  updatedAt: true,
-}).extend({
-  logoFile: z.any().optional(),
-}).partial();
+// ==================== UPDATE BUSINESS SCHEMA ====================
+export const updateBusinessSchema = baseBusinessSchema
+  .omit({
+    id: true,
+    businessId: true,
+    createdAt: true,
+    updatedAt: true,
+  })
+  .partial()
+  .extend({
+    logoFile: z.any().optional(),
+    // Allow payment fields at root level for updates
+    paymentType: z.enum(['TILL', 'PAYBILL', 'POCHI']).optional(),
+    tillNumber: z.string().optional(),
+    paybillNumber: z.string().optional(),
+    accountNumber: z.string().optional(),
+    pochiNumber: z.string().optional(),
+  })
+  .transform((data) => {
+    // Handle payment config transformation for updates
+    const {
+      paymentType, tillNumber, paybillNumber, accountNumber, pochiNumber,
+      ...rest
+    } = data;
 
-export const Business = businessSchema;
+    let result = { ...rest };
+
+    // If any payment fields are provided, build paymentConfig
+    if (paymentType !== undefined || tillNumber !== undefined ||
+      paybillNumber !== undefined || accountNumber !== undefined ||
+      pochiNumber !== undefined) {
+
+      // Get existing paymentConfig from data if available
+      const existingConfig = rest.paymentConfig || {};
+
+      const updatedPaymentConfig = {
+        paymentType: paymentType ?? existingConfig.paymentType ?? 'TILL',
+        tillNumber: tillNumber !== undefined ? tillNumber : existingConfig.tillNumber,
+        paybillNumber: paybillNumber !== undefined ? paybillNumber : existingConfig.paybillNumber,
+        accountNumber: accountNumber !== undefined ? accountNumber : existingConfig.accountNumber,
+        pochiNumber: pochiNumber !== undefined ? pochiNumber : existingConfig.pochiNumber,
+      };
+
+      console.log("💰 Updating paymentConfig:", updatedPaymentConfig);
+      result.paymentConfig = updatedPaymentConfig;
+    }
+
+    return result;
+  });
+
+// ==================== EXPORTS ====================
+export const Business = baseBusinessSchema;
 export const InsertBusiness = insertBusinessSchema;
 export const UpdateBusiness = updateBusinessSchema;
+
+// For backward compatibility
+export const businessSchema = baseBusinessSchema;

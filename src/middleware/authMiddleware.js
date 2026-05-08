@@ -1,31 +1,33 @@
 // src/middleware/authMiddleware.js
 import jwt from 'jsonwebtoken';
+import { storage } from '../storage.js';
+import { isBlacklisted } from '../tokenBlacklist.js';
 
 // Create auth middleware with storage dependency
 export const createAuthMiddleware = (storage) => {
-    
+
     // ==================== HELPER: CHECK BUSINESS STATUS ====================
     const checkBusinessStatus = async (businessId) => {
         if (!businessId) {
-            return { 
-                isActive: true, 
-                message: 'No business associated' 
+            return {
+                isActive: true,
+                message: 'No business associated'
             };
         }
 
         try {
             const business = await storage.getBusiness(businessId);
-            
+
             if (!business) {
-                return { 
-                    isActive: false, 
-                    message: 'Business not found' 
+                return {
+                    isActive: false,
+                    message: 'Business not found'
                 };
             }
 
             const businessStatus = business.status ? business.status.toLowerCase() : 'active';
             const isActive = !['inactive', 'disabled', 'suspended'].includes(businessStatus);
-            
+
             return {
                 isActive,
                 businessStatus,
@@ -34,9 +36,9 @@ export const createAuthMiddleware = (storage) => {
             };
         } catch (error) {
             console.error('Error checking business status:', error);
-            return { 
-                isActive: false, 
-                message: 'Error checking business status' 
+            return {
+                isActive: false,
+                message: 'Error checking business status'
             };
         }
     };
@@ -48,9 +50,17 @@ export const createAuthMiddleware = (storage) => {
             const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
             if (!token) {
-                return res.status(401).json({ 
-                    success: false, 
-                    message: 'Access token required' 
+                return res.status(401).json({
+                    success: false,
+                    message: 'Access token required'
+                });
+            }
+
+            if (isBlacklisted(token)) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Session expired. Please login again.',
+                    code: 'TOKEN_REVOKED'
                 });
             }
 
@@ -60,27 +70,27 @@ export const createAuthMiddleware = (storage) => {
             // Attach user data to request
             req.user = decoded;
             next();
-            
+
         } catch (error) {
             console.error('JWT verification error:', error.message);
-            
+
             if (error.name === 'TokenExpiredError') {
-                return res.status(401).json({ 
-                    success: false, 
-                    message: 'Token expired. Please login again.' 
-                });
-            }
-            
-            if (error.name === 'JsonWebTokenError') {
-                return res.status(401).json({ 
-                    success: false, 
-                    message: 'Invalid token' 
+                return res.status(401).json({
+                    success: false,
+                    message: 'Token expired. Please login again.'
                 });
             }
 
-            return res.status(500).json({ 
-                success: false, 
-                message: 'Authentication failed' 
+            if (error.name === 'JsonWebTokenError') {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Invalid token'
+                });
+            }
+
+            return res.status(500).json({
+                success: false,
+                message: 'Authentication failed'
             });
         }
     };
@@ -89,15 +99,15 @@ export const createAuthMiddleware = (storage) => {
     const requireActiveBusiness = async (req, res, next) => {
         try {
             if (!req.user) {
-                return res.status(401).json({ 
-                    success: false, 
-                    message: 'Authentication required' 
+                return res.status(401).json({
+                    success: false,
+                    message: 'Authentication required'
                 });
             }
 
             // Get business ID from token payload
             const businessId = req.user.businessUUID || req.user.businessId || req.user.associatedBusinessId;
-            
+
             if (!businessId) {
                 // Users without business association (e.g., super admin) can proceed
                 console.log("⚠️ User has no business association, skipping business check");
@@ -106,7 +116,7 @@ export const createAuthMiddleware = (storage) => {
 
             // Check business status
             const businessStatusCheck = await checkBusinessStatus(businessId);
-            
+
             if (!businessStatusCheck.isActive) {
                 return res.status(403).json({
                     success: false,
@@ -132,19 +142,19 @@ export const createAuthMiddleware = (storage) => {
     const authorize = (allowedRoles) => {
         return (req, res, next) => {
             if (!req.user) {
-                return res.status(401).json({ 
-                    success: false, 
-                    message: 'Authentication required' 
+                return res.status(401).json({
+                    success: false,
+                    message: 'Authentication required'
                 });
             }
 
             const userRole = req.user.role;
-            
+
             if (!allowedRoles.includes(userRole)) {
                 console.log(`🚫 Access denied for role: ${userRole}. Required: ${allowedRoles}`);
-                return res.status(403).json({ 
-                    success: false, 
-                    message: 'Insufficient permissions' 
+                return res.status(403).json({
+                    success: false,
+                    message: 'Insufficient permissions'
                 });
             }
 
@@ -157,16 +167,16 @@ export const createAuthMiddleware = (storage) => {
     const allowBusinessCreation = async (req, res, next) => {
         try {
             if (!req.user) {
-                return res.status(401).json({ 
-                    success: false, 
-                    message: 'Authentication required' 
+                return res.status(401).json({
+                    success: false,
+                    message: 'Authentication required'
                 });
             }
 
             // Check if user is admin
             const adminRoles = ['super-admin', 'super_admin', 'Super_Admin', 'Biztrack_ADMIN', 'admin'];
             const isAdmin = adminRoles.includes(req.user.role?.toLowerCase());
-            
+
             if (!isAdmin) {
                 return res.status(403).json({
                     success: false,
@@ -196,70 +206,126 @@ export const createAuthMiddleware = (storage) => {
     const requireBusinessOwner = async (req, res, next) => {
         try {
             if (!req.user) {
-                return res.status(401).json({ 
-                    success: false, 
-                    message: 'Authentication required' 
+                return res.status(401).json({
+                    success: false,
+                    message: 'Authentication required'
                 });
             }
 
-            // Get business ID from params or body
-            const businessIdFromParams = req.params.id || req.params.businessId;
-            const businessIdFromBody = req.body.businessId || req.body.businessUUID;
-            const targetBusinessId = businessIdFromParams || businessIdFromBody;
+            // Get business ID from params
+            const businessIdFromParams = req.params.id;
 
-            if (!targetBusinessId) {
+            if (!businessIdFromParams) {
                 return res.status(400).json({
                     success: false,
                     message: 'Business ID is required'
                 });
             }
 
-            // Check if user is admin
-            const adminRoles = ['super-admin', 'super_admin', 'Super_Admin', 'Biztrack_ADMIN', 'admin'];
-            const isAdmin = adminRoles.includes(req.user.role?.toLowerCase());
-            
-            // Check if user owns this business
-            const userBusinessId = req.user.businessUUID || req.user.businessId || req.user.associatedBusinessId;
-            const isBusinessOwner = userBusinessId === targetBusinessId;
-
-            if (!isAdmin && !isBusinessOwner) {
-                return res.status(403).json({
+            // Guard: reject obviously-wrong "IDs" that are route names
+            const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            const isNumericId = /^\d+$/.test(businessIdFromParams);
+            const isUUID = UUID_RE.test(businessIdFromParams);
+            if (!isNumericId && !isUUID) {
+                return res.status(400).json({
                     success: false,
-                    message: 'Forbidden: You do not have permission to access this business.'
+                    message: `'${businessIdFromParams}' is not a valid business ID. Did you mean GET /api/business/get-all?`
                 });
             }
 
-            // Check business status if user owns it (admin can access regardless)
-            if (isBusinessOwner) {
-                const businessStatusCheck = await checkBusinessStatus(targetBusinessId);
-                
-                if (!businessStatusCheck.isActive) {
-                    return res.status(403).json({
-                        success: false,
-                        message: `Your business "${businessStatusCheck.businessName || 'account'}" has been ${businessStatusCheck.businessStatus}. Please contact your administrator.`,
-                        businessStatus: businessStatusCheck.businessStatus,
-                        code: "BUSINESS_DISABLED"
-                    });
-                }
+            // Fetch full user from database to get all business associations
+            const fullUser = await storage.getUser(req.user.id);
 
-                req.business = businessStatusCheck.business;
+            if (!fullUser) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'User not found'
+                });
             }
 
+            // Check if user is admin
+            const adminRoles = ['super-admin', 'super_admin', 'Super_Admin', 'Biztrack_ADMIN', 'admin'];
+            const userRole = fullUser.role?.toLowerCase?.() || fullUser.role;
+            const isAdmin = adminRoles.some(role => role.toLowerCase() === userRole?.toLowerCase());
+
+            // Check if user owns this business - check all possible business ID fields
+            const userBusinessId = fullUser.businessId ||
+                fullUser.businessUUID ||
+                fullUser.associatedBusinessId ||
+                fullUser.business?.id ||
+                fullUser.business?._id;
+
+            console.log('🔍 Business ownership check:', {
+                userId: fullUser.id,
+                userEmail: fullUser.email,
+                userRole: fullUser.role,
+                userBusinessId,
+                targetBusinessId: businessIdFromParams,
+                isAdmin
+            });
+
+            // Convert IDs to strings for comparison
+            const userBusinessIdStr = userBusinessId?.toString();
+            const targetBusinessIdStr = businessIdFromParams.toString();
+
+            // Allow if user is admin OR if they own the business
+            if (isAdmin) {
+                console.log(`✅ Admin access granted for role: ${fullUser.role}`);
+
+                // Fetch business info for admin
+                const business = await storage.getBusiness(targetBusinessIdStr);
+                if (business) {
+                    req.business = business;
+                }
+
+                return next();
+            }
+
+            // For non-admin users, check business ownership
+            if (!userBusinessIdStr || userBusinessIdStr !== targetBusinessIdStr) {
+                console.error('❌ Business ownership mismatch:', {
+                    userBusinessId: userBusinessIdStr,
+                    targetBusinessId: targetBusinessIdStr,
+                    user: fullUser.email
+                });
+
+                return res.status(403).json({
+                    success: false,
+                    message: 'Access denied. You do not own this business.'
+                });
+            }
+
+            // Check business status for owner
+            const businessStatusCheck = await checkBusinessStatus(targetBusinessIdStr);
+
+            if (!businessStatusCheck.isActive) {
+                return res.status(403).json({
+                    success: false,
+                    message: `Your business "${businessStatusCheck.businessName || 'account'}" has been ${businessStatusCheck.businessStatus}. Please contact your administrator.`,
+                    businessStatus: businessStatusCheck.businessStatus,
+                    code: "BUSINESS_DISABLED"
+                });
+            }
+
+            req.business = businessStatusCheck.business;
+
+            console.log(`✅ Business ownership verified for user: ${fullUser.email}`);
             next();
+
         } catch (error) {
-            console.error('Business owner check error:', error);
+            console.error('❌ Business owner check error:', error);
             return res.status(500).json({
                 success: false,
-                message: 'Error checking business ownership'
+                message: 'Error verifying business ownership',
+                error: error.message
             });
         }
     };
-
     // ==================== PUBLIC BUSINESS STATUS CHECK ====================
     const checkPublicBusinessStatus = async (req, res, next) => {
         try {
             const businessId = req.params.id || req.params.businessId || req.query.businessId;
-            
+
             if (!businessId) {
                 return res.status(400).json({
                     success: false,
@@ -268,7 +334,7 @@ export const createAuthMiddleware = (storage) => {
             }
 
             const businessStatusCheck = await checkBusinessStatus(businessId);
-            
+
             // Attach to request for use in route
             req.businessStatus = businessStatusCheck;
             next();
@@ -292,45 +358,79 @@ export const createAuthMiddleware = (storage) => {
     };
 };
 
-// Legacy export for backward compatibility
-export const authenticateToken = (req, res, next) => {
-    // This is now a factory function, so we need to use createAuthMiddleware
-    console.warn('⚠️ Direct use of authenticateToken is deprecated. Use createAuthMiddleware instead.');
-    
+// ==================== AUTHENTICATE TOKEN ====================
+export const authenticateToken = async (req, res, next) => {
     try {
         const authHeader = req.headers['authorization'];
-        const token = authHeader && authHeader.split(' ')[1];
+        const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
         if (!token) {
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Access token required' 
+            return res.status(401).json({
+                success: false,
+                message: 'Access token required'
             });
         }
 
+        if (isBlacklisted(token)) {
+            return res.status(401).json({
+                success: false,
+                message: 'Session expired. Please login again.',
+                code: 'TOKEN_REVOKED'
+            });
+        }
+
+        // Verify JWT token
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        req.user = decoded;
+
+        // Fetch full user from database to ensure we have all fields
+        const fullUser = await storage.getUser(decoded.id);
+
+        if (!fullUser) {
+            return res.status(401).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // Attach full user data to request
+        req.user = {
+            id: fullUser.id,
+            _id: fullUser._id,
+            email: fullUser.email,
+            role: fullUser.role,
+            firstName: fullUser.firstName,
+            lastName: fullUser.lastName,
+            // Include all possible business ID fields
+            businessId: fullUser.businessId,
+            businessUUID: fullUser.businessUUID,
+            associatedBusinessId: fullUser.associatedBusinessId,
+            businessName: fullUser.businessName,
+            status: fullUser.status
+        };
+
+        console.log(`✅ User authenticated: ${fullUser.email} (Role: ${fullUser.role})`);
         next();
+
     } catch (error) {
         console.error('JWT verification error:', error.message);
-        
+
         if (error.name === 'TokenExpiredError') {
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Token expired. Please login again.' 
-            });
-        }
-        
-        if (error.name === 'JsonWebTokenError') {
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Invalid token' 
+            return res.status(401).json({
+                success: false,
+                message: 'Token expired. Please login again.'
             });
         }
 
-        return res.status(500).json({ 
-            success: false, 
-            message: 'Authentication failed' 
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid token'
+            });
+        }
+
+        return res.status(500).json({
+            success: false,
+            message: 'Authentication failed'
         });
     }
 };
@@ -339,19 +439,19 @@ export const authenticateToken = (req, res, next) => {
 export const authorize = (allowedRoles) => {
     return (req, res, next) => {
         if (!req.user) {
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Authentication required' 
+            return res.status(401).json({
+                success: false,
+                message: 'Authentication required'
             });
         }
 
         const userRole = req.user.role;
-        
+
         if (!allowedRoles.includes(userRole)) {
             console.log(`🚫 Access denied for role: ${userRole}. Required: ${allowedRoles}`);
-            return res.status(403).json({ 
-                success: false, 
-                message: 'Insufficient permissions' 
+            return res.status(403).json({
+                success: false,
+                message: 'Insufficient permissions'
             });
         }
 

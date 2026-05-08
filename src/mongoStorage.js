@@ -48,6 +48,13 @@ const businessSchema = new mongoose.Schema({
   logoUrl: { type: String, default: "" },
   primaryColor: { type: String, default: "#000000" },
   status: { type: String, default: "active" },
+  paymentConfig: {
+    paymentType: { type: String, enum: ['TILL', 'PAYBILL', 'POCHI'], default: 'TILL' },
+    tillNumber: { type: String, default: null },
+    paybillNumber: { type: String, default: null },
+    accountNumber: { type: String, default: null },
+    pochiNumber: { type: String, default: null }
+  },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

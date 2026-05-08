@@ -11,21 +11,19 @@ import { authenticateToken } from '../../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// Create product
-router.route('/')
-  .post(authenticateToken, createProduct);
+// POST   /api/products/add-product
+router.post('/add-product', authenticateToken, createProduct);
 
-// Business products endpoint - MUST come before :id
-router.route('/business/:businessId')
-  .get(authenticateToken, getProductsByBusiness);
+// GET    /api/products/get-products/:businessId
+router.get('/get-products/:businessId', authenticateToken, getProductsByBusiness);
 
-// Stock update endpoint - MUST come before :id
-router.route('/:id/stock')
-  .put(authenticateToken, updateProductStock);
+// PUT    /api/products/update-stock/:id
+router.put('/update-stock/:id', authenticateToken, updateProductStock);
 
-// Single product operations - MUST come LAST
-router.route('/:id')
-  .put(authenticateToken, updateProduct)
-  .delete(authenticateToken, deleteProduct);
+// PUT    /api/products/update-product/:id
+router.put('/update-product/:id', authenticateToken, updateProduct);
+
+// DELETE /api/products/delete-product/:id
+router.delete('/delete-product/:id', authenticateToken, deleteProduct);
 
 export default router;

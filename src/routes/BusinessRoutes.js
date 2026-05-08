@@ -17,12 +17,12 @@ export default function BusinessRoutes(storage) {
 
     // Create auth middleware with storage dependency
     const authMiddleware = createAuthMiddleware(storage);
-    const { 
-        authenticateToken, 
-        requireActiveBusiness, 
+    const {
+        authenticateToken,
+        requireActiveBusiness,
         allowBusinessCreation,
         requireBusinessOwner,
-        authorize 
+        authorize
     } = authMiddleware;
 
     // Admin roles configuration
@@ -30,7 +30,7 @@ export default function BusinessRoutes(storage) {
 
     // Ensure logos directory exists - inside src/assets/logos
     const logosDir = path.join(__dirname, '..', 'assets', 'logos');
-    
+
     try {
         if (!fs.existsSync(logosDir)) {
             fs.mkdirSync(logosDir, { recursive: true });
@@ -46,17 +46,17 @@ export default function BusinessRoutes(storage) {
             // Return default logo as full URL
             return `http://localhost:3000/assets/logos/default_logo.svg`;
         }
-        
+
         // If it's already a full URL, return as-is
         if (logoPath.startsWith('http://') || logoPath.startsWith('https://')) {
             return logoPath;
         }
-        
+
         // If it's a relative path, make it a full URL
         if (logoPath.startsWith('/')) {
             return `http://localhost:3000${logoPath}`;
         }
-        
+
         // If it's just a filename, prepend the path
         return `http://localhost:3000/assets/logos/${logoPath}`;
     };
@@ -66,22 +66,22 @@ export default function BusinessRoutes(storage) {
         if (!logoPath) {
             return '/assets/logos/default_logo.svg';
         }
-        
+
         // If it's already a relative path, return as-is
         if (logoPath.startsWith('/assets/logos/')) {
             return logoPath;
         }
-        
+
         // If it's a full URL, extract the relative part
         if (logoPath.startsWith('http://localhost:3000/assets/logos/')) {
             return logoPath.replace('http://localhost:3000', '');
         }
-        
+
         // If it's a filename, make it a relative path
         if (logoPath.includes('.')) {
             return `/assets/logos/${logoPath}`;
         }
-        
+
         return '/assets/logos/default_logo.svg';
     };
 
@@ -119,11 +119,11 @@ export default function BusinessRoutes(storage) {
     const deleteLogoFile = (logoPath) => {
         try {
             const relativePath = getRelativeLogoPath(logoPath);
-            
+
             if (relativePath && relativePath !== '/assets/logos/default_logo.svg') {
                 const filename = path.basename(relativePath);
                 const filePath = path.join(logosDir, filename);
-                
+
                 if (fs.existsSync(filePath)) {
                     fs.unlinkSync(filePath);
                     console.log(`🗑️ Deleted old logo file: ${filename}`);
@@ -138,16 +138,33 @@ export default function BusinessRoutes(storage) {
     // --- Helper Function: Transform Business Response ---
     const transformBusinessResponse = (business) => {
         if (!business) return null;
-        
+
         const businessObj = business?.toObject ? business.toObject() : business;
-        
+
+        // Extract payment fields from paymentConfig for backward compatibility
+        const paymentConfig = businessObj.paymentConfig || {
+            paymentType: 'TILL',
+            tillNumber: null,
+            paybillNumber: null,
+            accountNumber: null,
+            pochiNumber: null
+        };
+
         return {
             ...businessObj,
             status: businessObj?.status?.toUpperCase() || 'ACTIVE',
             // Return full URL for logo in API responses
             logoUrl: getFullLogoUrl(businessObj.logoUrl),
             // Also include as 'logo' for compatibility with login response
-            logo: getFullLogoUrl(businessObj.logoUrl)
+            logo: getFullLogoUrl(businessObj.logoUrl),
+            // Include payment fields at root level for frontend compatibility
+            paymentType: paymentConfig.paymentType,
+            tillNumber: paymentConfig.tillNumber,
+            paybillNumber: paymentConfig.paybillNumber,
+            accountNumber: paymentConfig.accountNumber,
+            pochiNumber: paymentConfig.pochiNumber,
+            // Include full payment config
+            paymentConfig
         };
     };
 
@@ -173,6 +190,23 @@ export default function BusinessRoutes(storage) {
             processedData.logoUrl = getRelativeLogoPath(processedData.logoUrl);
         }
 
+        // Handle payment fields - ensure they're properly set
+        const paymentFields = ['paymentType', 'tillNumber', 'paybillNumber', 'accountNumber', 'pochiNumber'];
+        paymentFields.forEach(field => {
+            if (processedData[field] === '') {
+                processedData[field] = null;
+            }
+        });
+
+        // Log payment fields for debugging
+        console.log("💰 Payment Fields from FormData:", {
+            paymentType: processedData.paymentType,
+            tillNumber: processedData.tillNumber,
+            paybillNumber: processedData.paybillNumber,
+            accountNumber: processedData.accountNumber,
+            pochiNumber: processedData.pochiNumber
+        });
+
         return processedData;
     };
 
@@ -189,7 +223,6 @@ export default function BusinessRoutes(storage) {
     /**
      * @route POST /api/business/create-business
      * @desc Create a new business (Requires Admin). Handles logo upload via FormData.
-     * NOTE: Uses allowBusinessCreation middleware which skips business status check for admin
      */
     router.post('/create-business',
         authenticateToken,
@@ -208,8 +241,8 @@ export default function BusinessRoutes(storage) {
                     filename: logoFile.filename
                 } : 'No file');
 
-                // 1. Zod Validation
-                const parsedData = insertBusinessSchema.parse({
+                // 1. Prepare data for validation including payment fields
+                const businessData = {
                     businessName: body.businessName,
                     registrationNumber: body.registrationNumber,
                     address: body.address,
@@ -220,13 +253,32 @@ export default function BusinessRoutes(storage) {
                     description: body.description,
                     primaryColor: body.primaryColor,
                     status: body.status || 'active',
-                    logoUrl: undefined, // Will be set after validation
-                    owner: body.owner
+                    owner: body.owner,
+                    // Payment fields
+                    paymentType: body.paymentType,
+                    tillNumber: body.tillNumber,
+                    paybillNumber: body.paybillNumber,
+                    accountNumber: body.accountNumber,
+                    pochiNumber: body.pochiNumber,
+                    logoUrl: undefined // Will be set after validation
+                };
+
+                // Remove undefined values
+                Object.keys(businessData).forEach(key =>
+                    businessData[key] === undefined && delete businessData[key]
+                );
+
+                console.log("✅ Business Data to validate:", businessData);
+
+                // 2. Zod Validation
+                const parsedData = insertBusinessSchema.parse(businessData);
+
+                console.log("✅ Validated Data with Payment Config:", {
+                    businessName: parsedData.businessName,
+                    paymentConfig: parsedData.paymentConfig
                 });
 
-                console.log("✅ Validated Data:", parsedData);
-
-                // 2. Check for uniqueness
+                // 3. Check for uniqueness
                 const existingBusinessByReg = await storage.getBusinessByRegistrationNumber(parsedData.registrationNumber);
                 if (existingBusinessByReg) {
                     return res.status(400).json({
@@ -235,7 +287,7 @@ export default function BusinessRoutes(storage) {
                     });
                 }
 
-                // 3. Handle Logo Upload Logic
+                // 4. Handle Logo Upload Logic
                 let logoUrl = '/assets/logos/default_logo.svg'; // Default relative path
 
                 if (logoFile) {
@@ -252,24 +304,24 @@ export default function BusinessRoutes(storage) {
                         logoUrl = body.logoUrl;
                         console.log(`🖼️ Logo URL provided (converted to relative): ${logoUrl}`);
                     }
-                } else {
-                    // If logoUrl is NOT in the request at all, use default logo
-                    console.log(`🖼️ No logo field in request, using default: ${logoUrl}`);
                 }
 
-                // Prepare data for storage
-                const businessData = {
+                // Prepare data for storage - parsedData already has paymentConfig from transform
+                const businessToSave = {
                     ...parsedData,
                     logoUrl, // Store relative path in database
                     createdAt: new Date().toISOString(),
                     updatedAt: new Date().toISOString()
                 };
 
-                console.log("💾 Saving Business Data");
-                console.log("💾 Business data logo (relative):", businessData.logoUrl);
+                console.log("💾 Saving Business Data with Payment Config:", {
+                    businessName: businessToSave.businessName,
+                    paymentConfig: businessToSave.paymentConfig,
+                    logoUrl: businessToSave.logoUrl
+                });
 
-                // 4. Create Business in DB (storage will auto-generate businessId)
-                const newBusiness = await storage.createBusiness(businessData);
+                // 5. Create Business in DB (storage will auto-generate businessId)
+                const newBusiness = await storage.createBusiness(businessToSave);
 
                 // Transform response with full URL
                 const transformedBusiness = transformBusinessResponse(newBusiness);
@@ -283,12 +335,11 @@ export default function BusinessRoutes(storage) {
             } catch (error) {
                 if (error instanceof z.ZodError) {
                     console.error("❌ Validation Error:", error.errors);
-                    // SAFE FIX: Use safeMap to handle errors
                     const validationErrors = safeMap(error.errors || [], err => ({
                         field: err.path ? err.path.join('.') : 'unknown',
                         message: err.message || 'Validation error'
                     }));
-                    
+
                     return res.status(400).json({
                         success: false,
                         message: 'Validation failed',
@@ -314,20 +365,20 @@ export default function BusinessRoutes(storage) {
      * @route GET /api/business
      * @desc Get all businesses (Requires Admin + Active Business)
      */
-    router.get('/', 
-        authenticateToken, 
-        requireActiveBusiness, 
+    router.get('/get-all-businesses',
+        authenticateToken,
+        requireActiveBusiness,
         authorize(adminRoles),
         async (req, res) => {
             try {
                 console.log("📋 GET /api/business - Fetching all businesses");
                 const businesses = await storage.getBusinesses();
-                
+
                 // SAFE FIX: Ensure businesses is an array before mapping
                 const businessesArray = Array.isArray(businesses) ? businesses : [];
-                
+
                 // Transform data to match frontend expectations with full URLs
-                const transformedBusinesses = safeMap(businessesArray, business => 
+                const transformedBusinesses = safeMap(businessesArray, business =>
                     transformBusinessResponse(business)
                 );
 
@@ -351,14 +402,14 @@ export default function BusinessRoutes(storage) {
      * @route GET /api/business/:id
      * @desc Get business by ID (Requires Admin or business owner/associate + Active Business)
      */
-    router.get('/:id', 
-        authenticateToken, 
+    router.get('/get-business/:id',
+        authenticateToken,
         requireBusinessOwner,
         async (req, res) => {
             try {
                 const { id } = req.params;
                 console.log("📋 GET /api/business/:id - Fetching business:", id);
-                
+
                 const business = await storage.getBusiness(id);
 
                 if (!business) {
@@ -389,10 +440,10 @@ export default function BusinessRoutes(storage) {
      * @route PUT /api/business/:id
      * @desc Update business details (Requires Admin or business owner/associate + Active Business). Handles logo update via FormData.
      */
-    router.put('/:id', 
-        authenticateToken, 
+    router.put('/update-business/:id',
+        authenticateToken,
         requireBusinessOwner,
-        upload.single('logo'), 
+        upload.single('logo'),
         async (req, res) => {
             try {
                 const { id } = req.params;
@@ -420,20 +471,33 @@ export default function BusinessRoutes(storage) {
 
                 // 2. Authorization is already handled by requireBusinessOwner middleware
 
-                // 3. Prepare update data from request body
+                // 3. Prepare update data from request body including payment fields
                 const updateData = {};
 
-                // Only update fields that are present in the request
-                const fieldsToUpdate = [
+                // Update standard fields
+                const standardFields = [
                     'businessName', 'registrationNumber', 'address', 'businessType',
                     'email', 'phone', 'website', 'description', 'primaryColor',
                     'status', 'logoUrl', 'owner'
                 ];
 
-                fieldsToUpdate.forEach(field => {
+                standardFields.forEach(field => {
                     if (field in body && body[field] !== undefined) {
                         updateData[field] = body[field];
                     }
+                });
+
+                // Include payment fields if they're in the request
+                const paymentFields = ['paymentType', 'tillNumber', 'paybillNumber', 'accountNumber', 'pochiNumber'];
+                paymentFields.forEach(field => {
+                    if (field in body && body[field] !== undefined) {
+                        updateData[field] = body[field];
+                    }
+                });
+
+                console.log("📝 Update Data with Payment Fields:", {
+                    standardFields: Object.keys(updateData).filter(k => !paymentFields.includes(k)),
+                    paymentFields: Object.keys(updateData).filter(k => paymentFields.includes(k))
                 });
 
                 // 4. Handle Logo Update
@@ -444,10 +508,11 @@ export default function BusinessRoutes(storage) {
                     if (logoUrl && logoUrl !== '/assets/logos/default_logo.svg') {
                         deleteLogoFile(logoUrl);
                     }
-                    
+
                     // Use relative path for new logo
                     logoUrl = `/assets/logos/${logoFile.filename}`;
                     console.log(`🖼️ Logo Update (file): New logo saved to ${logoUrl}`);
+                    updateData.logoUrl = logoUrl;
                 } else if ('logoUrl' in body) {
                     // If logoUrl is explicitly provided in the request body
                     if (body.logoUrl === '') {
@@ -457,6 +522,7 @@ export default function BusinessRoutes(storage) {
                         }
                         logoUrl = '/assets/logos/default_logo.svg';
                         console.log(`🖼️ Logo cleared, using default: ${logoUrl}`);
+                        updateData.logoUrl = logoUrl;
                     } else if (body.logoUrl && body.logoUrl !== logoUrl) {
                         // New URL provided, delete old logo (if not default)
                         if (logoUrl && logoUrl !== '/assets/logos/default_logo.svg') {
@@ -464,18 +530,20 @@ export default function BusinessRoutes(storage) {
                         }
                         logoUrl = body.logoUrl; // Already converted to relative path
                         console.log(`🖼️ Logo Update (URL): ${existingBusinessObj.logoUrl} -> ${logoUrl}`);
+                        updateData.logoUrl = logoUrl;
                     }
                 }
 
-                // Add logoUrl to updateData
-                updateData.logoUrl = logoUrl;
-
                 // 5. Zod Validation (partial update)
+                console.log("🔍 Validating update data with updateBusinessSchema:", updateData);
                 const validatedData = updateBusinessSchema.parse(updateData);
-                console.log("✅ Validated PUT Update Data:", validatedData);
+                console.log("✅ Validated PUT Update Data:", {
+                    ...validatedData,
+                    paymentConfig: validatedData.paymentConfig
+                });
 
                 // 6. Check for registration number uniqueness (if being updated)
-                if (validatedData.registrationNumber && 
+                if (validatedData.registrationNumber &&
                     validatedData.registrationNumber !== existingBusinessObj.registrationNumber) {
                     const existingBusinessByReg = await storage.getBusinessByRegistrationNumber(validatedData.registrationNumber);
                     if (existingBusinessByReg && existingBusinessByReg.id !== existingBusinessObj.id) {
@@ -492,7 +560,12 @@ export default function BusinessRoutes(storage) {
                     updatedAt: new Date().toISOString()
                 };
 
-                console.log("💾 PUT Updating Business Data (relative logo):", finalUpdatePayload.logoUrl);
+                console.log("💾 PUT Updating Business Data:", {
+                    id,
+                    hasPaymentConfig: !!finalUpdatePayload.paymentConfig,
+                    paymentConfig: finalUpdatePayload.paymentConfig,
+                    logoUrl: finalUpdatePayload.logoUrl
+                });
 
                 // 7. Update Business in DB
                 const updatedBusiness = await storage.updateBusiness(id, finalUpdatePayload);
@@ -516,28 +589,28 @@ export default function BusinessRoutes(storage) {
             } catch (error) {
                 // FIXED: Add safe check for error.errors
                 if (error instanceof z.ZodError) {
-                    console.error("❌ PUT Validation Error:", error);
-                    
+                    console.error("❌ PUT Validation Error:", error.errors);
+
                     // SAFE FIX: Use safeMap to prevent undefined .map() call
                     const validationErrors = safeMap(error.errors || [], err => ({
                         field: err.path ? err.path.join('.') : 'unknown',
                         message: err.message || 'Validation error'
                     }));
-                    
+
                     return res.status(400).json({
                         success: false,
                         message: 'Validation failed',
                         errors: validationErrors
                     });
                 }
-                
+
                 if (error.message === 'Only image files are allowed!') {
                     return res.status(400).json({
                         success: false,
                         message: error.message
                     });
                 }
-                
+
                 console.error('🚨 PUT Business update error:', error);
                 res.status(500).json({
                     success: false,
@@ -552,9 +625,9 @@ export default function BusinessRoutes(storage) {
      * @route PUT /api/business/:id/status
      * @desc Toggle business status (Requires Admin + Active Business)
      */
-    router.put('/:id/status', 
-        authenticateToken, 
-        requireActiveBusiness, 
+    router.put('/update-status/:id',
+        authenticateToken,
+        requireActiveBusiness,
         authorize(adminRoles),
         async (req, res) => {
             try {
@@ -577,10 +650,10 @@ export default function BusinessRoutes(storage) {
                 }
 
                 // If admin is disabling their own business, special check
-                const isAdminDisablingOwnBusiness = 
-                    (req.user.businessUUID === id || req.user.associatedBusinessId === id) && 
+                const isAdminDisablingOwnBusiness =
+                    (req.user.businessUUID === id || req.user.associatedBusinessId === id) &&
                     ['inactive', 'disabled'].includes(status.toLowerCase());
-                
+
                 if (isAdminDisablingOwnBusiness) {
                     console.log("⚠️ Admin is attempting to disable their own business");
                     // Allow this - admin can disable their own business
@@ -621,9 +694,9 @@ export default function BusinessRoutes(storage) {
      * @route DELETE /api/business/:id
      * @desc Delete business (Archives by setting status to 'inactive') (Requires Admin + Active Business)
      */
-    router.delete('/:id', 
-        authenticateToken, 
-        requireActiveBusiness, 
+    router.delete('/delete-business/:id',
+        authenticateToken,
+        requireActiveBusiness,
         authorize(adminRoles),
         async (req, res) => {
             try {
@@ -640,9 +713,9 @@ export default function BusinessRoutes(storage) {
                 const existingBusinessObj = existingBusiness.toObject ? existingBusiness.toObject() : existingBusiness;
 
                 // If admin is deleting their own business, special check
-                const isAdminDeletingOwnBusiness = 
+                const isAdminDeletingOwnBusiness =
                     req.user.businessUUID === id || req.user.associatedBusinessId === id;
-                
+
                 if (isAdminDeletingOwnBusiness) {
                     console.log("⚠️ Admin is attempting to delete their own business");
                     // Warn but allow
@@ -688,10 +761,10 @@ export default function BusinessRoutes(storage) {
      * @route GET /api/business/:id/status
      * @desc Get business status (Public endpoint for checking business status)
      */
-    router.get('/:id/status', async (req, res) => {
+    router.get('/business-status/:id', async (req, res) => {
         try {
             const { id } = req.params;
-            
+
             const business = await storage.getBusiness(id);
             if (!business) {
                 return res.status(404).json({
@@ -720,9 +793,9 @@ export default function BusinessRoutes(storage) {
     });
 
     // Add test route to debug storage (with business check)
-    router.get('/debug/storage', 
-        authenticateToken, 
-        requireActiveBusiness, 
+    router.get('/debug/storage',
+        authenticateToken,
+        requireActiveBusiness,
         async (req, res) => {
             try {
                 const businesses = await storage.getBusinesses();

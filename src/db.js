@@ -1,13 +1,7 @@
-import mongoose from "mongoose";
-
+// Prisma connects lazily on first query — no explicit connect() needed.
+// This file is kept as a no-op so existing imports don't break.
 const connectDB = async () => {
-  try {
-    await mongoose.connect(process.env.MONGO_URI);
-    console.log("MongoDB connected successfully");
-  } catch (err) {
-    console.error("MongoDB connection failed", err);
-    process.exit(1);
-  }
+  console.log("PostgreSQL (Prisma) — connection is established on first query");
 };
 
 export default connectDB;

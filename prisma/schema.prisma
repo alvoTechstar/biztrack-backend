@@ -1,0 +1,220 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  Super_Admin
+  Biztrack_ADMIN
+  Hotel_Admin
+  Hotel_Cashier
+  Hotel_Waiter
+  Kiosk_Admin
+  Kiosk_Shopkeeper
+  Hospital_Admin
+  Doctor
+  Nurse
+  Lab_Technician
+  Receptionist
+  Pharmacist
+  Staff
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum OtpType {
+  login
+  reset
+  verification
+}
+
+enum OtpStatus {
+  pending
+  consumed
+  expired
+  revoked
+}
+
+enum PaymentType {
+  TILL
+  PAYBILL
+  POCHI
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model User {
+  id                   String     @id @default(uuid())
+  username             String     @unique
+  email                String     @unique
+  password             String
+  firstName            String
+  lastName             String
+  phone                String
+  role                 UserRole   @default(Kiosk_Shopkeeper)
+  businessName         String?
+  associatedBusinessId String?
+  institutionId        String?
+  institutionName      String?
+  status               UserStatus @default(ACTIVE)
+  permissions          String[]   @default(["read", "write", "delete"])
+  lastLogin            String     @default("Never")
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  @@map("users")
+}
+
+model Business {
+  id                 String      @id @default(uuid())
+  // Sequential numeric ID (0 = system business)
+  businessId         Int         @unique
+  registrationNumber String      @unique
+  businessName       String      @unique
+  owner              String
+  businessType       String
+  email              String
+  phone              String
+  address            String      @default("")
+  website            String      @default("")
+  description        String      @default("")
+  logoUrl            String      @default("")
+  primaryColor       String      @default("#000000")
+  status             String      @default("active")
+  // Flattened from the nested paymentConfig object in MongoDB
+  paymentType        PaymentType @default(TILL)
+  tillNumber         String?
+  paybillNumber      String?
+  accountNumber      String?
+  pochiNumber        String?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  @@map("businesses")
+}
+
+model Otp {
+  id          String    @id @default(uuid())
+  email       String
+  originalOtp String
+  maskedOtp   String?
+  type        OtpType   @default(login)
+  userId      String?
+  expiresAt   DateTime
+  status      OtpStatus @default(pending)
+  consumedAt  DateTime?
+  attempts    Int       @default(0)
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([email])
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([createdAt])
+  @@map("otps")
+}
+
+model Product {
+  id           String   @id @default(uuid())
+  name         String
+  sku          String
+  category     String
+  stock        Float    @default(0)
+  unit         String
+  buyingPrice  Float
+  price        Float
+  threshold    Float    @default(10)
+  // "In Stock" | "Low Stock" | "Out of Stock" — computed on write
+  status       String   @default("Out of Stock")
+  description  String   @default("")
+  businessId   Int
+  businessUUID String?
+  createdBy    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([sku, businessId])
+  @@index([businessId])
+  @@map("products")
+}
+
+// Transaction items extracted from the MongoDB embedded array
+model TransactionItem {
+  id            String      @id @default(uuid())
+  transactionId String
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  productId     String
+  productName   String
+  quantity      Float
+  unit          String      @default("units")
+  unitPrice     Float
+  totalPrice    Float
+
+  @@map("transaction_items")
+}
+
+model Transaction {
+  id                    String            @id @default(uuid())
+  transactionId         String            @unique
+  businessId            String
+  businessUUID          String
+  businessName          String?
+  businessType          String?
+  shopkeeperId          String
+  shopkeeperName        String
+  shopkeeperEmail       String?
+  shopkeeperPhone       String?
+  shopkeeperRole        String            @default("Kiosk_Shopkeeper")
+  items                 TransactionItem[]
+  totalAmount           Float
+  // "sale" | "debt" | "refund" | "return" | "adjustment"
+  type                  String            @default("sale")
+  // "cash" | "mpesa" | "debt"
+  paymentMethod         String
+  originalPaymentMethod String?
+  // "completed" | "pending" | "failed" | "cancelled"
+  status                String            @default("pending")
+  // "paid" | "pending" | "failed" | "cancelled"
+  paymentStatus         String            @default("pending")
+  amountPaid            Float             @default(0)
+  change                Float             @default(0)
+  customerPhone         String?
+  mpesaReceipt          String?
+  checkoutRequestId     String?
+  merchantRequestId     String?
+  customerName          String            @default("")
+  notes                 String?
+  debtPaid              Boolean           @default(false)
+  // "cash" | "mpesa"
+  debtPaymentMethod     String?
+  debtPaymentDate       DateTime?
+  datePaid              DateTime?
+  paidAt                DateTime?
+  paymentDate           DateTime?
+  completedAt           DateTime?
+  // Stores raw M-PESA callback data and other mixed payment details
+  paymentDetails        Json              @default("{}")
+  timestamp             DateTime          @default(now())
+  errorMessage          String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  @@index([businessId, timestamp])
+  @@index([shopkeeperId, timestamp])
+  @@index([businessId, status])
+  @@index([businessId, paymentMethod])
+  @@index([businessId, debtPaid])
+  @@index([checkoutRequestId])
+  @@map("transactions")
+}

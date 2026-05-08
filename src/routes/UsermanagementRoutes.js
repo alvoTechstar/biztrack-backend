@@ -457,7 +457,7 @@ export default function UserManagementRoutes(storage) {
  * @route GET /api/users
  * @desc Get all users (with proper filtering)
  */
-    router.get('/', protect, restrictToAdmin, async (req, res) => {
+    router.get('/get-all-users', protect, restrictToAdmin, async (req, res) => {
         try {
             const currentUser = req.user;
 
@@ -546,7 +546,7 @@ export default function UserManagementRoutes(storage) {
      * @route GET /api/users/:id
      * @desc Get user by ID - FIXED VERSION with business lookup
      */
-    router.get('/:id', protect, async (req, res) => {
+    router.get('/get-user/:id', protect, async (req, res) => {
         try {
             const { id } = req.params;
             const user = await storage.getUser(id);
@@ -746,7 +746,7 @@ export default function UserManagementRoutes(storage) {
      * @route PATCH /api/users/:id
      * @desc Update user details
      */
-    router.patch('/:id', protect, async (req, res) => {
+    router.patch('/update-user/:id', protect, async (req, res) => {
         try {
             const { id } = req.params;
             const body = req.body;
@@ -985,7 +985,7 @@ router.put('/update-user/:id', protect, restrictToAdmin, async (req, res) => {
      * @route PUT /api/users/:id/status
      * @desc Toggle user status (Requires Admin)
      */
-    router.put('/:id/status', protect, restrictToAdmin, async (req, res) => {
+    router.put('/update-status/:id', protect, restrictToAdmin, async (req, res) => {
         try {
             const { id } = req.params;
             const { status } = req.body;
@@ -1049,7 +1049,7 @@ router.put('/update-user/:id', protect, restrictToAdmin, async (req, res) => {
      * @route DELETE /api/users/:id
      * @desc Archive user (Requires Admin)
      */
-    router.delete('/:id', protect, restrictToAdmin, async (req, res) => {
+    router.delete('/delete-user/:id', protect, restrictToAdmin, async (req, res) => {
         try {
             const { id } = req.params;
 
@@ -1100,7 +1100,7 @@ router.put('/update-user/:id', protect, restrictToAdmin, async (req, res) => {
      * @route GET /api/users/email/:email
      * @desc Get user by email
      */
-    router.get('/email/:email', protect, async (req, res) => {
+    router.get('/by-email/:email', protect, async (req, res) => {
         try {
             const { email } = req.params;
             const user = await storage.getUserByEmail(email);
@@ -1129,7 +1129,7 @@ router.put('/update-user/:id', protect, restrictToAdmin, async (req, res) => {
      * @route GET /api/users/username/:username
      * @desc Get user by username
      */
-    router.get('/username/:username', protect, async (req, res) => {
+    router.get('/by-username/:username', protect, async (req, res) => {
         try {
             const { username } = req.params;
             const user = await storage.getUserByUsername(username);
@@ -1154,7 +1154,7 @@ router.put('/update-user/:id', protect, restrictToAdmin, async (req, res) => {
         }
     });
 
-    router.get('/business/:businessId', protect, async (req, res) => {
+    router.get('/by-business/:businessId', protect, async (req, res) => {
         try {
             const { businessId } = req.params;
             const currentUser = req.user;

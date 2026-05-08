@@ -1,4 +1,4 @@
-// backend/routes/TransactionRoutes.js
+// src/routes/kiosk/TransactionRoutes.js
 import express from 'express';
 import {
     createTransaction,
@@ -6,34 +6,36 @@ import {
     getDailyReportByBusiness,
     getAllTransactions,
     updateTransaction,
-    getTransactionByTransactionId
+    getTransactionByTransactionId,
+    getDebtsByBusiness,
+    repayDebt
 } from '../../controllers/TransactionController.js';
 import { authenticateToken } from '../../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// Create a new transaction
-// POST /api/transactions
-router.post('/', authenticateToken, createTransaction);
+// POST   /api/transactions/create-transaction
+router.post('/create-transaction', authenticateToken, createTransaction);
 
-// Get all transactions (for debugging)
-// GET /api/transactions
-router.get('/', authenticateToken, getAllTransactions);
+// GET    /api/transactions/get-all-transactions
+router.get('/get-all-transactions', authenticateToken, getAllTransactions);
 
-// Get transactions by business ID
-// GET /api/transactions/business/:businessId
-router.get('/business/:businessId', authenticateToken, getTransactionsByBusiness);
+// GET    /api/transactions/get-transactions/:businessId
+router.get('/get-transactions/:businessId', authenticateToken, getTransactionsByBusiness);
 
-// Get daily report by business
-// GET /api/transactions/business/:businessId/report/:date
-router.get('/business/:businessId/report/:date', authenticateToken, getDailyReportByBusiness);
+// GET    /api/transactions/daily-report/:businessId/:date
+router.get('/daily-report/:businessId/:date', authenticateToken, getDailyReportByBusiness);
 
-// Get transaction by transactionId (for polling) - MUST be before /:id route
-// GET /api/transactions/by-id/:transactionId
-router.get('/by-id/:transactionId', authenticateToken, getTransactionByTransactionId);
+// GET    /api/transactions/get-transaction/:transactionId
+router.get('/get-transaction/:transactionId', authenticateToken, getTransactionByTransactionId);
 
-// Update transaction (for debt payment and M-PESA updates)
-// PUT /api/transactions/:id
-router.put('/:id', authenticateToken, updateTransaction);
+// PUT    /api/transactions/update-transaction/:id
+router.put('/update-transaction/:id', authenticateToken, updateTransaction);
+
+// GET    /api/transactions/get-debts/:businessId   — list unpaid debts (add ?includeResolved=true for all)
+router.get('/get-debts/:businessId', authenticateToken, getDebtsByBusiness);
+
+// POST   /api/transactions/repay-debt/:id          — repay a debt with cash or mpesa
+router.post('/repay-debt/:id', authenticateToken, repayDebt);
 
 export default router;

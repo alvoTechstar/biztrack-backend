@@ -89,7 +89,9 @@ export class IStorage {
     async updateGivingRecordStatus(id, status, transactionId) {}
 }
 
-// Use MongoDB Atlas storage
-import { MongoStorage } from "./mongoStorage.js";
+// Switch between MongoDB and PostgreSQL by swapping the import below.
+// MongoDB:    import { MongoStorage } from "./mongoStorage.js";  const storage = new MongoStorage();
+// PostgreSQL: import { PgStorage }    from "./pgStorage.js";     const storage = new PgStorage();
+import { PgStorage } from "./pgStorage.js";
 
-export const storage = new MongoStorage();
+export const storage = new PgStorage();
