@@ -12,12 +12,36 @@ datasource db {
 enum UserRole {
   Super_Admin
   Biztrack_ADMIN
+  // Hotel
   Hotel_Admin
+  Hotel_Manager
+  Hotel_Receptionist
+  Hotel_Housekeeping
   Hotel_Cashier
   Hotel_Waiter
+  // Kiosk
   Kiosk_Admin
   Kiosk_Shopkeeper
+  Kiosk_Cashier
+  // Restaurant
+  Restaurant_Admin
+  Restaurant_Manager
+  Restaurant_Waiter
+  Restaurant_Chef
+  Restaurant_Cashier
+  // Retail
+  Retail_Admin
+  Retail_Manager
+  Retail_Cashier
+  Retail_Sales_Associate
+  // Hospital
   Hospital_Admin
+  Hospital_Doctor
+  Hospital_Nurse
+  Hospital_Receptionist
+  Hospital_Pharmacist
+  Hospital_Labtechnician
+  // Legacy hospital roles — kept for backward compatibility
   Doctor
   Nurse
   Lab_Technician
@@ -149,17 +173,39 @@ model Product {
   @@map("products")
 }
 
+// Hotel menu items — separate from kiosk stock Products.
+// image holds a URL or a compact base64 data URL uploaded from Menu Management.
+model MenuItem {
+  id           String   @id @default(uuid())
+  name         String
+  category     String
+  price        Float
+  description  String   @default("")
+  image        String   @default("")
+  available    Boolean  @default(true)
+  businessId   Int
+  businessUUID String?
+  createdBy    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([name, businessId])
+  @@index([businessId])
+  @@map("menu_items")
+}
+
 // Transaction items extracted from the MongoDB embedded array
 model TransactionItem {
   id            String      @id @default(uuid())
   transactionId String
   transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
-  productId     String
+  productId     String?
   productName   String
   quantity      Float
   unit          String      @default("units")
   unitPrice     Float
   totalPrice    Float
+  category      String?
 
   @@map("transaction_items")
 }
@@ -176,6 +222,7 @@ model Transaction {
   shopkeeperEmail       String?
   shopkeeperPhone       String?
   shopkeeperRole        String            @default("Kiosk_Shopkeeper")
+  tableNumber           String?
   items                 TransactionItem[]
   totalAmount           Float
   // "sale" | "debt" | "refund" | "return" | "adjustment"
@@ -209,6 +256,11 @@ model Transaction {
   errorMessage          String?
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
+  // Hotel order linkage (null for kiosk/hospital transactions)
+  orderId               String?
+  orderNumber           String?
+  cashReceived          Float?
+  order                 Order?            @relation(fields: [orderId], references: [id])
 
   @@index([businessId, timestamp])
   @@index([shopkeeperId, timestamp])
@@ -216,5 +268,46 @@ model Transaction {
   @@index([businessId, paymentMethod])
   @@index([businessId, debtPaid])
   @@index([checkoutRequestId])
+  @@index([orderId])
   @@map("transactions")
+}
+
+// ─── Hotel Orders ─────────────────────────────────────────────────────────────
+
+model Order {
+  id            String        @id @default(uuid())
+  orderId       String        @unique    // frontend-generated e.g. "ORD-0001"
+  businessId    String
+  businessType  String?
+  tableNumber   String?
+  total         Float
+  status        String        @default("pending")
+  waiter        String?
+  note          String?
+  transactionId String?       // UUID of the primary payment Transaction (set on completion)
+  cancelReason  String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  completedAt   DateTime?
+  items         OrderItem[]
+  transactions  Transaction[]
+
+  @@index([businessId])
+  @@index([businessId, status])
+  @@index([businessId, createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id       String  @id @default(uuid())
+  orderId  String
+  order    Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  name     String
+  quantity Float
+  price    Float
+  category String?
+  // Menu item image (URL or compact base64 data URL) shown on order cards
+  image    String?
+
+  @@map("order_items")
 }

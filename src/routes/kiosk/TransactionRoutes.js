@@ -35,7 +35,8 @@ router.put('/update-transaction/:id', authenticateToken, updateTransaction);
 // GET    /api/transactions/get-debts/:businessId   — list unpaid debts (add ?includeResolved=true for all)
 router.get('/get-debts/:businessId', authenticateToken, getDebtsByBusiness);
 
-// POST   /api/transactions/repay-debt/:id          — repay a debt with cash or mpesa
+// POST/PUT /api/transactions/repay-debt/:id — repay a debt with cash or mpesa
 router.post('/repay-debt/:id', authenticateToken, repayDebt);
+router.put('/repay-debt/:id', authenticateToken, repayDebt);
 
 export default router;

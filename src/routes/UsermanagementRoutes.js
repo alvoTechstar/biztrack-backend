@@ -116,9 +116,9 @@ export default function UserManagementRoutes(storage) {
     // Role validation by business type - MATCHING YOUR ACTUAL DATA
     const validateRoleForBusinessType = (role, businessType) => {
         const allowedRoles = {
-            'Kiosk': ['Kiosk_Admin', 'Kiosk_Shopkeeper', 'Super_Admin', 'Biztrack_ADMIN'],
-            'Hotel': ['Hotel_Admin', 'Hotel_Manager', 'Hotel_Receptionist', 'Hotel_Housekeeping', 'Super_Admin', 'Biztrack_ADMIN'],
-            'Restaurant': ['Restaurant_Admin', 'Restaurant_Manager', 'Restaurant_Waiter', 'Restaurant_Chef', 'Super_Admin', 'Biztrack_ADMIN'],
+            'Kiosk': ['Kiosk_Admin', 'Kiosk_Shopkeeper', 'Kiosk_Cashier', 'Super_Admin', 'Biztrack_ADMIN'],
+            'Hotel': ['Hotel_Admin', 'Hotel_Manager', 'Hotel_Receptionist', 'Hotel_Housekeeping', 'Hotel_Waiter', 'Hotel_Cashier', 'Super_Admin', 'Biztrack_ADMIN'],
+            'Restaurant': ['Restaurant_Admin', 'Restaurant_Manager', 'Restaurant_Waiter', 'Restaurant_Chef', 'Restaurant_Cashier', 'Super_Admin', 'Biztrack_ADMIN'],
             'Retail': ['Retail_Admin', 'Retail_Manager', 'Retail_Cashier', 'Retail_Sales_Associate', 'Super_Admin', 'Biztrack_ADMIN'],
         };
 
@@ -279,9 +279,9 @@ export default function UserManagementRoutes(storage) {
     // Helper function to get roles for business type
     function getRolesForBusinessType(businessType) {
         const roleMapping = {
-            'Kiosk': ['Kiosk_Admin', 'Kiosk_Shopkeeper'],
-            'Hotel': ['Hotel_Admin', 'Hotel_Waiter', 'Hotel_Cashier'],
-            'Restaurant': ['Restaurant_Admin', 'Restaurant_Manager', 'Restaurant_Waiter', 'Restaurant_Chef'],
+            'Kiosk': ['Kiosk_Admin', 'Kiosk_Shopkeeper', 'Kiosk_Cashier'],
+            'Hotel': ['Hotel_Admin', 'Hotel_Manager', 'Hotel_Receptionist', 'Hotel_Housekeeping', 'Hotel_Waiter', 'Hotel_Cashier'],
+            'Restaurant': ['Restaurant_Admin', 'Restaurant_Manager', 'Restaurant_Waiter', 'Restaurant_Chef', 'Restaurant_Cashier'],
             'Retail': ['Retail_Admin', 'Retail_Manager', 'Retail_Cashier', 'Retail_Sales_Associate'],
         };
         return roleMapping[businessType] || ['Admin'];
@@ -1154,7 +1154,17 @@ router.put('/update-user/:id', protect, restrictToAdmin, async (req, res) => {
         }
     });
 
+    // Spec-required alias: GET /api/users/business/:businessId
+    router.get('/business/:businessId', protect, async (req, res) => {
+        req.params.businessId = req.params.businessId;
+        return businessUsersHandler(req, res);
+    });
+
     router.get('/by-business/:businessId', protect, async (req, res) => {
+        return businessUsersHandler(req, res);
+    });
+
+    async function businessUsersHandler(req, res) {
         try {
             const { businessId } = req.params;
             const currentUser = req.user;
@@ -1312,7 +1322,7 @@ router.put('/update-user/:id', protect, restrictToAdmin, async (req, res) => {
                 error: error.message
             });
         }
-    });
+    }
 
     return router;
 }

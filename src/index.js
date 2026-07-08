@@ -10,8 +10,10 @@ import BusinessRoutes from "./routes/BusinessRoutes.js";
 import path from 'path';
 import { fileURLToPath } from 'url';
 import ProductRoutes from "./routes/kiosk/ProductRoutes.js";
+import MenuRoutes from "./routes/hotel/MenuRoutes.js";
 import TransactionRoutes from "./routes/kiosk/TransactionRoutes.js";
 import MpesaRoutes from "./routes/MpesaRoutes.js";
+import OrderRoutes from "./routes/OrderRoutes.js";
 
 // Load environment variables
 dotenv.config();
@@ -26,14 +28,17 @@ app.use('/assets', express.static(path.join(__dirname, 'assets')));
 
 // Standard body parsers for JSON and URL-encoded data.
 // Multer will handle multipart/form-data for the file upload routes.
-app.use(express.json());
-app.use(express.urlencoded({ extended: true })); // Good practice for general form data
+// Limit raised to allow compact base64 menu-item images in product payloads
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' })); // Good practice for general form data
 app.use(cors());
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 
 async function startServer() {
     try {
+        console.log(`⏳ Starting server (pid ${process.pid}) — connecting to database...`);
+
         // Connect to database (no-op for Prisma — connects lazily)
         await connectDB();
         await storage.initialize();
@@ -43,7 +48,9 @@ async function startServer() {
         app.use("/api/auth", AuthRoutes(storage));
         app.use("/api/business", BusinessRoutes(storage));
         app.use("/api/products", ProductRoutes);
+        app.use("/api/menu", MenuRoutes);
         app.use("/api/transactions", TransactionRoutes);
+        app.use("/api/orders", OrderRoutes);
         app.use('/api/mpesa', MpesaRoutes);
 
         // Global business status check middleware for all authenticated routes
@@ -100,8 +107,17 @@ async function startServer() {
             });
         });
 
-        app.listen(PORT, () => {
+        const server = app.listen(PORT, () => {
             console.log(`🚀 Server is running on http://localhost:${PORT}`);
+        });
+
+        server.on('error', (error) => {
+            if (error.code === 'EADDRINUSE') {
+                console.error(`❌ Port ${PORT} is already in use — another instance of the server is probably running. Stop it (or free the port) and try again.`);
+            } else {
+                console.error('❌ Server error:', error);
+            }
+            process.exit(1);
         });
     } catch (error) {
         console.error("❌ Failed to start server:", error);

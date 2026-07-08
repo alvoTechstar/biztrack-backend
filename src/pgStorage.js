@@ -653,6 +653,50 @@ export class PgStorage {
     }
   }
 
+  // ─── Menu item helpers (hotel menu — separate from kiosk products) ───────
+
+  async getMenuItems(businessId) {
+    return await prisma.menuItem.findMany({
+      where: { businessId: Number(businessId) },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  async getMenuItem(id) {
+    return (await prisma.menuItem.findUnique({ where: { id } })) ?? undefined;
+  }
+
+  async createMenuItem(data) {
+    return await prisma.menuItem.create({
+      data: {
+        ...data,
+        id: randomUUID(),
+        businessId: Number(data.businessId),
+      },
+    });
+  }
+
+  async updateMenuItem(id, data) {
+    try {
+      return await prisma.menuItem.update({
+        where: { id },
+        data: { ...data, updatedAt: new Date() },
+      });
+    } catch (error) {
+      if (error.code === "P2025") return undefined;
+      throw error;
+    }
+  }
+
+  async deleteMenuItem(id) {
+    try {
+      return await prisma.menuItem.delete({ where: { id } });
+    } catch (error) {
+      if (error.code === "P2025") return null;
+      throw error;
+    }
+  }
+
   // ─── Transaction helpers ─────────────────────────────────────────────────
 
   async getTransactions(businessId, filters = {}) {
@@ -787,5 +831,98 @@ export class PgStorage {
 
   async countTransactions(where) {
     return await prisma.transaction.count({ where });
+  }
+
+  // ─── Order methods ───────────────────────────────────────────────────────────
+
+  async createOrder(data) {
+    const { items = [], ...rest } = data;
+    return await prisma.order.create({
+      data: {
+        ...rest,
+        id: randomUUID(),
+        items: { create: items.map(item => ({ ...item, id: randomUUID() })) },
+      },
+      include: { items: true },
+    });
+  }
+
+  async getOrder(id) {
+    return (
+      (await prisma.order.findUnique({
+        where: { id },
+        include: { items: true },
+      })) ?? undefined
+    );
+  }
+
+  async getOrderByOrderId(orderId) {
+    return (
+      (await prisma.order.findUnique({
+        where: { orderId },
+        include: { items: true },
+      })) ?? undefined
+    );
+  }
+
+  async getOrdersByBusiness(businessId, { statuses, from, to, waiter } = {}) {
+    const where = { businessId: String(businessId) };
+    if (statuses && statuses.length > 0) where.status = { in: statuses };
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(from);
+      if (to) {
+        const end = new Date(to);
+        end.setHours(23, 59, 59, 999);
+        where.createdAt.lte = end;
+      }
+    }
+    if (waiter) where.waiter = { contains: waiter, mode: 'insensitive' };
+    return await prisma.order.findMany({
+      where,
+      include: { items: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async updateOrder(id, data) {
+    try {
+      return await prisma.order.update({
+        where: { id },
+        data: { ...data, updatedAt: new Date() },
+        include: { items: true },
+      });
+    } catch (error) {
+      if (error.code === 'P2025') return undefined;
+      throw error;
+    }
+  }
+
+  // Atomically create a payment Transaction and mark the linked Order as completed.
+  async createPaymentTransaction(txData, orderId) {
+    return await prisma.$transaction(async (tx) => {
+      const { items = [], businessId, ...rest } = txData;
+      const transaction = await tx.transaction.create({
+        data: {
+          ...rest,
+          businessId: String(businessId),
+          id: randomUUID(),
+          items: { create: items.map(item => ({ ...item, id: randomUUID() })) },
+        },
+        include: { items: true },
+      });
+
+      const order = await tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: 'completed',
+          transactionId: transaction.id,
+          completedAt: new Date(),
+        },
+        include: { items: true },
+      });
+
+      return { transaction, order };
+    });
   }
 }

@@ -392,18 +392,20 @@ export const authenticateToken = async (req, res, next) => {
             });
         }
 
-        // Attach full user data to request
+        // Attach full user data to request.
+        // businessUUID comes from the JWT payload (set at login) because the User
+        // table does not store it — fall back to the decoded claim.
         req.user = {
             id: fullUser.id,
-            _id: fullUser._id,
+            _id: fullUser.id,
             email: fullUser.email,
             role: fullUser.role,
             firstName: fullUser.firstName,
             lastName: fullUser.lastName,
-            // Include all possible business ID fields
-            businessId: fullUser.businessId,
-            businessUUID: fullUser.businessUUID,
+            businessId: decoded.businessId ?? fullUser.businessId,
+            businessUUID: decoded.businessUUID ?? fullUser.businessUUID,
             associatedBusinessId: fullUser.associatedBusinessId,
+            institutionId: fullUser.institutionId,
             businessName: fullUser.businessName,
             status: fullUser.status
         };

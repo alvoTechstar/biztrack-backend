@@ -373,37 +373,42 @@ export default function AuthRoutes(storage) {
                 });
             }
 
-            // Create user object
+            // Create user object — must include all fields the frontend expects
+            const bizId = String(business.businessId);
             const cleanUser = {
+                _id: user.id,
                 id: user.id,
-                email: user.email,
                 firstName: user.firstName,
                 lastName: user.lastName,
+                email: user.email,
+                username: user.username,
+                phone: user.phone,
                 role: user.role,
                 status: user.status,
                 permissions: user.permissions || [],
                 lastLogin: new Date().toISOString(),
-                businessId: business.businessId,
+                // All three business ID aliases the frontend reads
+                businessId: bizId,
+                institutionId: bizId,
+                associatedBusinessId: bizId,
                 businessUUID: business.id,
                 businessName: business.businessName,
                 businessType: business.businessType,
                 primaryColor: business.primaryColor,
                 logo: business.logoUrl,
                 businessStatus: business.status || 'active',
-                // Add payment configurations with robust default handling
                 paymentConfig: {
-                    paymentType: business.paymentConfig?.paymentType || 'TILL',
-                    tillNumber: business.paymentConfig?.tillNumber || null,
-                    paybillNumber: business.paymentConfig?.paybillNumber || null,
-                    accountNumber: business.paymentConfig?.accountNumber || null,
-                    pochiNumber: business.paymentConfig?.pochiNumber || null
+                    paymentType: business.paymentConfig?.paymentType || business.paymentType || 'TILL',
+                    tillNumber: business.paymentConfig?.tillNumber || business.tillNumber || null,
+                    paybillNumber: business.paymentConfig?.paybillNumber || business.paybillNumber || null,
+                    accountNumber: business.paymentConfig?.accountNumber || business.accountNumber || null,
+                    pochiNumber: business.paymentConfig?.pochiNumber || business.pochiNumber || null
                 },
-                // Root level fields
-                paymentType: business.paymentConfig?.paymentType || 'TILL',
-                tillNumber: business.paymentConfig?.tillNumber || null,
-                paybillNumber: business.paymentConfig?.paybillNumber || null,
-                accountNumber: business.paymentConfig?.accountNumber || null,
-                pochiNumber: business.paymentConfig?.pochiNumber || null
+                paymentType: business.paymentConfig?.paymentType || business.paymentType || 'TILL',
+                tillNumber: business.paymentConfig?.tillNumber || business.tillNumber || null,
+                paybillNumber: business.paymentConfig?.paybillNumber || business.paybillNumber || null,
+                accountNumber: business.paymentConfig?.accountNumber || business.accountNumber || null,
+                pochiNumber: business.paymentConfig?.pochiNumber || business.pochiNumber || null
             };
 
             // Create JWT token

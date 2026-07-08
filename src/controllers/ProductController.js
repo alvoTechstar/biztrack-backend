@@ -118,10 +118,20 @@ const getProductsByBusiness = async (req, res) => {
   }
 };
 
+// Only these fields may be written on update — stray payload fields (e.g. _id,
+// businessType) would otherwise be passed to Prisma and rejected as unknown args.
+const UPDATABLE_PRODUCT_FIELDS = [
+  'name', 'sku', 'category', 'stock', 'unit', 'buyingPrice', 'price',
+  'threshold', 'description', 'businessUUID',
+];
+
 const updateProduct = async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = { ...req.body };
+    const updateData = {};
+    for (const field of UPDATABLE_PRODUCT_FIELDS) {
+      if (req.body[field] !== undefined) updateData[field] = req.body[field];
+    }
 
     const existingProduct = await storage.getProduct(id);
     if (!existingProduct) {
