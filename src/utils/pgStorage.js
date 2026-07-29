@@ -1,5 +1,5 @@
 // src/pgStorage.js — PostgreSQL drop-in replacement for mongoStorage.js
-const randomUUID = require('crypto')
+const { randomUUID } = require('crypto')
 const bcrypt = require('bcrypt');
 const prisma = require("./db.pg.js");
 const logger = require("./logger.js");

@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const z = require('zod');
 const { insertBusinessSchema, processBusinessData, transformBusinessResponse } = require('../utils/schema.js');
-const storage = require('../utils/storage.js');
+const { storage } = require('../utils/storage.js');
+
 
 // Safe map helper to prevent crashes if arrays are undefined/null
 const safeMap = (array, callback) => {
@@ -58,6 +59,8 @@ exports.createBusiness = async (req, res) => {
         // 2. Zod Validation
         const parsedData = insertBusinessSchema.safeParse(businessData);
 
+        console.log("🔍 Validation Result:", parsedData);
+
         if (!parsedData.success) {
             console.error("❌ Validation Error:", parsedData.error.issues);
             const validationErrors = parsedData.error.issues.map(err => ({
@@ -73,12 +76,12 @@ exports.createBusiness = async (req, res) => {
         }
 
         console.log("✅ Validated Data with Payment Config:", {
-            businessName: parsedData.businessName,
-            paymentConfig: parsedData.paymentConfig
+            businessName: parsedData.data.businessName,
+            paymentConfig: parsedData.data.paymentConfig
         });
 
         // 3. Check for uniqueness
-        const existingBusinessByReg = await storage.getBusinessByRegistrationNumber(parsedData.registrationNumber);
+        const existingBusinessByReg = await storage.getBusinessByRegistrationNumber(parsedData.data.registrationNumber);
         if (existingBusinessByReg) {
             return res.status(400).json({
                 success: false,
@@ -107,7 +110,7 @@ exports.createBusiness = async (req, res) => {
 
         // Prepare data for storage - parsedData already has paymentConfig from transform
         const businessToSave = {
-            ...parsedData,
+            ...parsedData.data,
             logoUrl, // Store relative path in database
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
