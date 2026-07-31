@@ -2,7 +2,7 @@
 const { randomUUID } = require('crypto')
 const bcrypt = require('bcrypt');
 const prisma = require("./db.pg.js");
-const logger = require("./logger.js");
+const { logger } = require("./logger.js");
 
 // ─── Shape helpers ────────────────────────────────────────────────────────────
 
