@@ -5,15 +5,16 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "postinstall": "prisma generate",
-    "start": "nodemon index.js",
-    "dev": "nodemon index.js"
+    "postinstall": "npx prisma generate",
+    "start": "node index.js",
+    "dev": "node index.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@prisma/client": "^6.0.1",
     "axios": "^1.19.0",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
@@ -23,7 +24,7 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.2.0",
     "nodemailer": "^9.0.3",
-    "nodemon": "^3.1.14",
+    
     "path": "^0.12.7",
     "pg": "^8.22.0",
     "pg-hstore": "^2.3.4",
@@ -32,7 +33,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@prisma/client": "^6.0.1",
-    "prisma": "^6.0.1"
+    "prisma": "^6.0.1",
+    "nodemon": "^3.1.14"
   }
 }
