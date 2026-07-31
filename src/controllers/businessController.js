@@ -3,13 +3,111 @@ const router = express.Router();
 const z = require('zod');
 const { insertBusinessSchema, processBusinessData, transformBusinessResponse } = require('../utils/schema.js');
 const { storage } = require('../utils/storage.js');
-
+const path = require('path');
 
 // Safe map helper to prevent crashes if arrays are undefined/null
 const safeMap = (array, callback) => {
     if (!Array.isArray(array)) return [];
     return array.map(callback);
 };
+
+const logosDir = path.join(__dirname, '..', 'assets', 'logos');
+
+const getRelativeLogoPath = (logoPath) => {
+    if (!logoPath) {
+        return '/assets/logos/default_logo.svg';
+    }
+
+    // If it's already a relative path, return as-is
+    if (logoPath.startsWith('/assets/logos/')) {
+        return logoPath;
+    }
+
+    // If it's a full URL, extract the relative part
+    if (logoPath.startsWith('http://localhost:3000/assets/logos/')) {
+        return logoPath.replace('http://localhost:3000', '');
+    }
+
+    // If it's a filename, make it a relative path
+    if (logoPath.includes('.')) {
+        return `/assets/logos/${logoPath}`;
+    }
+
+    return '/assets/logos/default_logo.svg';
+};
+
+const deleteLogoFile = (logoPath) => {
+    try {
+        const relativePath = getRelativeLogoPath(logoPath);
+
+        if (relativePath && relativePath !== '/assets/logos/default_logo.svg') {
+            const filename = path.basename(relativePath);
+            const filePath = path.join(logosDir, filename);
+
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+                console.log(`🗑️ Deleted old logo file: ${filename}`);
+            }
+        }
+    } catch (error) {
+        console.error('❌ Error deleting logo file:', error.message);
+        // Don't fail the request if logo deletion fails
+    }
+};
+
+// const getFullLogoUrl = (logoPath) => {
+//     if (!logoPath) {
+//         // Return default logo as full URL
+//         return `http://localhost:3000/assets/logos/default_logo.svg`;
+//     }
+
+//     // If it's already a full URL, return as-is
+//     if (logoPath.startsWith('http://') || logoPath.startsWith('https://')) {
+//         return logoPath;
+//     }
+
+//     // If it's a relative path, make it a full URL
+//     if (logoPath.startsWith('/')) {
+//         return `http://localhost:3000${logoPath}`;
+//     }
+
+//     // If it's just a filename, prepend the path
+//     return `http://localhost:3000/assets/logos/${logoPath}`;
+// };
+
+// const transformBusinessResponse = (business) => {
+//     if (!business) return null;
+
+//     const businessObj = business?.toObject ? business.toObject() : business;
+
+//     // Extract payment fields from paymentConfig for backward compatibility
+//     const paymentConfig = businessObj.paymentConfig || {
+//         paymentType: 'TILL',
+//         tillNumber: null,
+//         paybillNumber: null,
+//         accountNumber: null,
+//         pochiNumber: null
+//     };
+
+//     return {
+//         ...businessObj,
+//         status: businessObj?.status?.toUpperCase() || 'ACTIVE',
+//         // Return full URL for logo in API responses
+//         logoUrl: getFullLogoUrl(businessObj.logoUrl),
+//         // Also include as 'logo' for compatibility with login response
+//         logo: getFullLogoUrl(businessObj.logoUrl),
+//         // Include payment fields at root level for frontend compatibility
+//         paymentType: paymentConfig.paymentType,
+//         tillNumber: paymentConfig.tillNumber,
+//         paybillNumber: paymentConfig.paybillNumber,
+//         accountNumber: paymentConfig.accountNumber,
+//         pochiNumber: paymentConfig.pochiNumber,
+//         // Include full payment config
+//         paymentConfig
+//     };
+// };
+
+
 
 exports.createBusiness = async (req, res) => {
 
@@ -454,6 +552,116 @@ exports.updateStatus = async(req, res) => {
         res.status(500).json({
             success: false,
             message: 'Internal server error during status update.'
+        });
+    }
+}
+
+exports.deleteBusiness = async(req, res) => {
+    try {
+        const { id } = req.params;
+
+        const existingBusiness = await storage.getBusiness(id);
+        if (!existingBusiness) {
+            return res.status(404).json({
+                success: false,
+                message: 'Business not found.'
+            });
+        }
+
+        const existingBusinessObj = existingBusiness.toObject ? existingBusiness.toObject() : existingBusiness;
+
+        // If admin is deleting their own business, special check
+        const isAdminDeletingOwnBusiness =
+            req.user.businessUUID === id || req.user.associatedBusinessId === id;
+
+        if (isAdminDeletingOwnBusiness) {
+            console.log("⚠️ Admin is attempting to delete their own business");
+            // Warn but allow
+        }
+
+        // Delete logo file if it exists and is not default
+        if (existingBusinessObj.logoUrl && existingBusinessObj.logoUrl !== '/assets/logos/default_logo.svg') {
+            deleteLogoFile(existingBusinessObj.logoUrl);
+        }
+
+        // Set business status to 'inactive' (archive)
+        const archivedBusiness = await storage.updateBusiness(id, {
+            status: 'inactive',
+            updatedAt: new Date().toISOString()
+        });
+
+        if (!archivedBusiness) {
+            return res.status(404).json({
+                success: false,
+                message: 'Business not found after archive attempt.'
+            });
+        }
+
+        const archivedBusinessObj = archivedBusiness.toObject ? archivedBusiness.toObject() : archivedBusiness;
+
+        res.status(200).json({
+            success: true,
+            message: `Business "${archivedBusinessObj.businessName}" successfully archived.`,
+            data: archivedBusinessObj
+        });
+
+    } catch (error) {
+        console.error('❌ Business delete/archive error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error during business deletion.'
+        });
+    }
+}
+
+exports.businessStatus = async(req, res) => {
+    try {
+        const { id } = req.params;
+
+        const business = await storage.getBusiness(id);
+        if (!business) {
+            return res.status(404).json({
+                success: false,
+                message: 'Business not found.'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                id: business.id,
+                businessId: business.businessId,
+                businessName: business.businessName,
+                status: business.status || 'active',
+                isActive: !['inactive', 'disabled', 'suspended'].includes((business.status || '').toLowerCase())
+            }
+        });
+    } catch (error) {
+        console.error('❌ Get business status error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error.'
+        });
+    }
+}
+
+exports.debugStorage = async(req, res) => {
+    try {
+        const businesses = await storage.getBusinesses();
+        res.json({
+            success: true,
+            storageType: typeof storage,
+            businessesType: typeof businesses,
+            isArray: Array.isArray(businesses),
+            count: businesses?.length || 0,
+            sample: businesses?.[0] || null,
+            userBusinessId: req.user.businessUUID,
+            userBusinessStatus: req.business?.status
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
         });
     }
 }

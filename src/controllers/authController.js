@@ -4,61 +4,12 @@ const validator = require('validator');
 const bcrypt = require('bcrypt');
 const z = require('zod');
 const { storage } = require('../utils/storage.js');
-const { transporter } = require('../services/mailer.js');
+const { createTransporter } = require('../services/mailer.js');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const generateOTP = () => {
     return Math.floor(100000 + Math.random() * 900000).toString();
-};
-
-const canAccessBusiness = (user, businessId) => {
-    console.log('🔍 Checking business access:', {
-            userId: user?.id,
-            userRole: user?.role,
-            targetBusinessId: businessId
-        });
-
-        // SUPER ADMIN and BizTrack Admin can access all businesses
-        if (user.role === 'Super_Admin' || user.role === 'Biztrack_ADMIN') {
-            console.log('✅ Access granted: Super Admin / BizTrack Admin');
-            return true;
-        }
-
-        // Get all possible business IDs from the user
-        const userBusinessIds = [
-            String(user.businessId || '').trim(),
-            String(user.associatedBusinessId || '').trim(),
-            String(user.institutionId || '').trim(),
-            String(user.businessUUID || '').trim()
-        ].filter(id => id.length > 0);
-
-        const targetBusinessId = String(businessId || '').trim();
-
-        console.log(`🔍 Business ID comparison:`, {
-            userBusinessIds,
-            targetBusinessId,
-            hasMatch: userBusinessIds.includes(targetBusinessId)
-        });
-
-        // Check exact match
-        if (userBusinessIds.includes(targetBusinessId)) {
-            console.log('✅ Access granted: Exact business ID match');
-            return true;
-        }
-
-        // Try numeric comparison
-        for (const userBusinessId of userBusinessIds) {
-            const userNum = parseInt(userBusinessId, 10);
-            const targetNum = parseInt(targetBusinessId, 10);
-
-            if (!isNaN(userNum) && !isNaN(targetNum) && userNum === targetNum) {
-                console.log('✅ Access granted: Numeric business ID match');
-                return true;
-            }
-        }
-
-        console.log(`❌ Access denied: No business ID match`);
-        return false;
 };
 
 const checkBusinessStatus = async (businessId) => {
@@ -99,6 +50,9 @@ const checkBusinessStatus = async (businessId) => {
 
 const sendOTPEmail = async (email, otp, type = 'login') => {
     // Check if email is configured
+    const transporter = createTransporter();
+
+
     if (!transporter || !process.env.EMAIL_USER || !process.env.SMTP_PASS) {
         return {
             success: false,
@@ -287,166 +241,561 @@ exports.login = async (req, res) => {
     }
 }
 
-exports.createUser = async (req, res) => {
+exports.verifyOTP = async(req, res) => {
     try {
-        const body = req.body;
+        const { email, otp } = req.body;
 
-        console.log("📨 Creating user:", {
-            email: body.email,
-            username: body.username,
-            businessId: body.businessId,
-            businessIdType: typeof body.businessId,
-            requestedBy: req.user?.id || 'N/A',
-            requestedRole: req.user?.role || 'N/A'
-        });
-
-        // 1. Validate business access
-        if (!canAccessBusiness(req.user, body.businessId)) {
-            return res.status(403).json({
+        if (!email || !otp) {
+            return res.status(400).json({
                 success: false,
-                message: 'You can only create users for your assigned business.'
+                message: "Email and OTP are required"
             });
         }
 
-        // 2. Fetch the business
-        const business = await storage.getBusiness(body.businessId);
+        // Check OTP status
+        const otpStatus = await storage.getOTPStatus(email, otp);
+
+        if (!otpStatus.exists) {
+            return res.status(400).json({
+                success: false,
+                message: "No OTP found for this email"
+            });
+        }
+
+        if (otpStatus.status === "consumed") {
+            return res.status(400).json({
+                success: false,
+                message: "This OTP has already been used",
+                code: "OTP_ALREADY_CONSUMED"
+            });
+        }
+
+        if (otpStatus.status === "expired") {
+            return res.status(400).json({
+                success: false,
+                message: "OTP has expired. Please request a new one",
+                code: "OTP_EXPIRED"
+            });
+        }
+
+        if (!otpStatus.canBeUsed) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid OTP status",
+                code: "INVALID_OTP_STATUS"
+            });
+        }
+
+        // Verify OTP
+        const storedOTP = await storage.getValidOTP(
+            email,
+            otp,
+            'login',
+            {
+                ipAddress: req.ip,
+                userAgent: req.headers['user-agent']
+            }
+        );
+
+        if (!storedOTP) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid or expired OTP. Please request a new one"
+            });
+        }
+
+        // Consume OTP
+        await storage.consumeOTP(
+            email,
+            otp,
+            {
+                ipAddress: req.ip,
+                userAgent: req.headers['user-agent'],
+                consumptionSource: "login_verification"
+            }
+        );
+
+        // Get user
+        const user = await storage.getUserByEmail(email);
+        const businessId = user.associatedBusinessId || user.institutionId;
+
+        // Check business status AGAIN before issuing token
+        const businessStatusCheck = await checkBusinessStatus(businessId);
+
+        if (!businessStatusCheck.isActive) {
+            return res.status(403).json({
+                success: false,
+                message: `Your business "${businessStatusCheck.businessName || 'account'}" has been ${businessStatusCheck.businessStatus}. Please contact your administrator.`,
+                businessStatus: businessStatusCheck.businessStatus,
+                code: "BUSINESS_DISABLED"
+            });
+        }
+
+        const business = businessStatusCheck.business || await storage.getBusiness(businessId);
+
         if (!business) {
             return res.status(404).json({
                 success: false,
-                message: 'Business not found.'
+                message: "Business profile not found"
             });
         }
 
-        const businessObj = business.toObject ? business.toObject() : business;
-
-        console.log('✅ Found business:', {
-            name: businessObj.businessName,
-            businessId: businessObj.businessId,
-            id: businessObj.id
-        });
-
-        // 3. Normalize the role based on business type
-        const normalizedRole = normalizeRole(body.role, businessObj.businessType);
-
-        // 4. Validate role for business type
-        if (!validateRoleForBusinessType(normalizedRole, businessObj.businessType)) {
-            return res.status(400).json({
-                success: false,
-                message: `Invalid role "${body.role}" for business type "${businessObj.businessType}".`,
-                allowedRoles: getRolesForBusinessType(businessObj.businessType)
-            });
-        }
-
-        // 5. Generate temporary password
-        const tempPassword = Math.random().toString(36).slice(-8);
-
-        // 6. CRITICAL FIX: Prepare data with NUMERIC businessId
-        const userData = {
-            username: body.username,
-            firstName: body.firstName,
-            lastName: body.lastName,
-            email: body.email,
-            phone: body.phoneNumber,
-            role: normalizedRole,
-            password: tempPassword,
-
-            // CRITICAL: Store as NUMERIC
-            businessId: parseInt(businessObj.businessId, 10),
-
-            // Also store UUID for compatibility
-            businessUUID: businessObj.id || businessObj.businessUUID,
-
-            // Keep string versions for backward compatibility
-            associatedBusinessId: String(businessObj.businessId),
-            institutionId: String(businessObj.businessId),
-
-            // Business metadata
-            businessName: businessObj.businessName,
-            institutionName: businessObj.businessName,
-
-            status: 'ACTIVE',
-            lastLogin: 'Never',
-            createdBy: req.user.id,
-            createdAt: new Date().toISOString(),
+        // Create user object — must include all fields the frontend expects
+        const bizId = String(business.businessId);
+        const cleanUser = {
+            _id: user.id,
+            id: user.id,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            email: user.email,
+            username: user.username,
+            phone: user.phone,
+            role: user.role,
+            status: user.status,
+            permissions: user.permissions || [],
+            lastLogin: new Date().toISOString(),
+            // All three business ID aliases the frontend reads
+            businessId: bizId,
+            institutionId: bizId,
+            associatedBusinessId: bizId,
+            businessUUID: business.id,
+            businessName: business.businessName,
+            businessType: business.businessType,
+            primaryColor: business.primaryColor,
+            logo: business.logoUrl,
+            businessStatus: business.status || 'active',
+            paymentConfig: {
+                paymentType: business.paymentConfig?.paymentType || business.paymentType || 'TILL',
+                tillNumber: business.paymentConfig?.tillNumber || business.tillNumber || null,
+                paybillNumber: business.paymentConfig?.paybillNumber || business.paybillNumber || null,
+                accountNumber: business.paymentConfig?.accountNumber || business.accountNumber || null,
+                pochiNumber: business.paymentConfig?.pochiNumber || business.pochiNumber || null
+            },
+            paymentType: business.paymentConfig?.paymentType || business.paymentType || 'TILL',
+            tillNumber: business.paymentConfig?.tillNumber || business.tillNumber || null,
+            paybillNumber: business.paymentConfig?.paybillNumber || business.paybillNumber || null,
+            accountNumber: business.paymentConfig?.accountNumber || business.accountNumber || null,
+            pochiNumber: business.paymentConfig?.pochiNumber || business.pochiNumber || null
         };
 
-        console.log('📦 User data to be saved:', {
-            username: userData.username,
-            businessId: userData.businessId,
-            businessIdType: typeof userData.businessId,
-            businessUUID: userData.businessUUID,
-            associatedBusinessId: userData.associatedBusinessId
-        });
+        // Create JWT token
+        const tokenPayload = {
+            id: user.id,
+            email: user.email,
+            role: user.role,
+            businessUUID: business.id,
+            businessId: business.businessId,
+            businessStatus: business.status || 'active'
+        };
 
-        // 7. Check for unique username and email
-        const existingUsername = await storage.getUserByUsername(userData.username);
-        if (existingUsername) {
-            return res.status(400).json({
-                success: false,
-                message: 'Username already exists.'
-            });
-        }
+        const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '1h' });
 
-        const existingEmail = await storage.getUserByEmail(userData.email);
-        if (existingEmail) {
-            return res.status(400).json({
-                success: false,
-                message: 'Email already exists.'
-            });
-        }
+        // Update last login
+        await storage.updateUserLastLogin(user.id);
 
-        // 8. Create User in DB
-        const newUser = await storage.createUser(userData);
-
-        console.log('✅ User created:', {
-            id: newUser.id || newUser._id,
-            username: newUser.username,
-            businessId: newUser.businessId,
-            businessIdType: typeof newUser.businessId
-        });
-
-        // 9. Generate password reset token and send email
-        const resetToken = generatePasswordResetToken();
-        const emailSent = await sendPasswordResetEmail(newUser, resetToken, businessObj);
-
-        console.log(`✅ User created successfully: ${newUser.username} for business: ${businessObj.businessName}`);
-
-        res.status(201).json({
+        res.status(200).json({
             success: true,
-            message: emailSent
-                ? 'User created successfully. Password reset email sent.'
-                : 'User created successfully. Email notification failed.',
-            user: {
-                id: newUser.id || newUser._id,
-                username: newUser.username,
-                firstName: newUser.firstName,
-                lastName: newUser.lastName,
-                email: newUser.email,
-                phone: newUser.phone,
-                role: newUser.role,
-                status: newUser.status,
-                businessId: newUser.businessId,
-                businessUUID: newUser.businessUUID,
-                businessName: businessObj.businessName,
-                businessType: businessObj.businessType,
-            },
-            emailSent
+            message: "Login successful",
+            user: cleanUser,
+            token: token,
+            expiresIn: 3600
         });
 
     } catch (error) {
-        if (error instanceof z.ZodError) {
-            console.error("❌ Validation Error:", error.errors);
-            return res.status(400).json({
-                success: false,
-                message: 'Validation failed',
-                errors: error.errors
-            });
-        }
-        console.error('🚨 User creation error:', error);
+        console.error('OTP verification error:', error.message);
         res.status(500).json({
             success: false,
-            message: 'Internal server error during user creation.',
-            error: error.message
+            message: "Internal server error during OTP verification"
         });
     }
 }
+
+exports.resendOTP = async(req, res) => {
+    try {
+        const { email } = req.body;
+
+        if (!email) {
+            return res.status(400).json({
+                success: false,
+                message: "Email is required"
+            });
+        }
+
+        const user = await storage.getUserByEmail(email);
+        if (!user) {
+            // For security, don't reveal if user exists
+            return res.json({
+                success: true,
+                message: "If the email exists, a new OTP has been sent"
+            });
+        }
+
+        // Check business status before resending OTP
+        const businessId = user.associatedBusinessId || user.institutionId;
+        const businessStatusCheck = await checkBusinessStatus(businessId);
+
+        if (!businessStatusCheck.isActive) {
+            return res.status(403).json({
+                success: false,
+                message: `Your business "${businessStatusCheck.businessName || 'account'}" has been ${businessStatusCheck.businessStatus}. Please contact your administrator.`,
+                businessStatus: businessStatusCheck.businessStatus,
+                code: "BUSINESS_DISABLED"
+            });
+        }
+
+        const otp = generateOTP();
+
+        const otpResult = await storage.createOTP(
+            email,
+            otp,
+            'login',
+            user.id,
+            {
+                ipAddress: req.ip,
+                userAgent: req.headers['user-agent'],
+                resend: true
+            }
+        );
+
+        const emailResult = await sendOTPEmail(email, otp, 'login');
+
+        const response = {
+            success: true,
+            message: emailResult.devMode
+                ? `New OTP: ${otp} (Email service: ${emailResult.error || 'Not configured'})`
+                : "New OTP sent to your email",
+            devMode: emailResult.devMode || false,
+            otpMasked: otpResult.maskedOtp
+        };
+
+        if (emailResult.devMode) {
+            response.otp = otp;
+        }
+
+        res.json(response);
+
+    } catch (error) {
+        console.error('Resend OTP error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: "Unable to resend OTP"
+        });
+    }
+}
+
+exports.forgotPassword = async(req, res) => {
+    try {
+        const { email } = req.body;
+
+        if (!email) {
+            return res.status(400).json({
+                success: false,
+                message: "Email is required"
+            });
+        }
+
+        const user = await storage.getUserByEmail(email);
+        if (!user) {
+            // For security, don't reveal if user exists
+            return res.json({
+                success: true,
+                message: "If the email exists, a reset OTP has been sent"
+            });
+        }
+
+        // Check business status before allowing password reset
+        const businessId = user.associatedBusinessId || user.institutionId;
+        const businessStatusCheck = await checkBusinessStatus(businessId);
+
+        if (!businessStatusCheck.isActive) {
+            return res.status(403).json({
+                success: false,
+                message: `Your business "${businessStatusCheck.businessName || 'account'}" has been ${businessStatusCheck.businessStatus}. Please contact your administrator.`,
+                businessStatus: businessStatusCheck.businessStatus,
+                code: "BUSINESS_DISABLED"
+            });
+        }
+
+        const recentAttempts = await storage.getRecentOTPAttempts(email, 10);
+        if (recentAttempts >= 3) {
+            return res.status(429).json({
+                success: false,
+                message: "Too many reset attempts. Please wait 10 minutes."
+            });
+        }
+
+        const otp = generateOTP();
+        const otpResult = await storage.createOTP(
+            email,
+            otp,
+            'reset',
+            user.id,
+            {
+                ipAddress: req.ip,
+                userAgent: req.headers['user-agent']
+            }
+        );
+
+        const emailResult = await sendOTPEmail(email, otp, 'reset');
+
+        res.json({
+            success: true,
+            message: emailResult.devMode
+                ? `Reset OTP: ${otp} (Email service not configured)`
+                : "Reset OTP sent to your email",
+            devMode: emailResult.devMode || false,
+            otpMasked: otpResult.maskedOtp
+        });
+
+    } catch (error) {
+        console.error('Forgot password error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: "Unable to process password reset"
+        });
+    }
+}
+
+exports.resendResetOTP = async(req, res) => {
+    try {
+        const { email } = req.body;
+
+        if (!email) {
+            return res.status(400).json({
+                success: false,
+                message: "Email is required"
+            });
+        }
+
+        const user = await storage.getUserByEmail(email);
+        if (!user) {
+            // Don't reveal whether the email exists
+            return res.json({
+                success: true,
+                message: "If the email exists, a new reset OTP has been sent"
+            });
+        }
+
+        const businessId = user.associatedBusinessId || user.institutionId;
+        const businessStatusCheck = await checkBusinessStatus(businessId);
+
+        if (!businessStatusCheck.isActive) {
+            return res.status(403).json({
+                success: false,
+                message: `Your business "${businessStatusCheck.businessName || 'account'}" has been ${businessStatusCheck.businessStatus}. Please contact your administrator.`,
+                businessStatus: businessStatusCheck.businessStatus,
+                code: "BUSINESS_DISABLED"
+            });
+        }
+
+        const recentAttempts = await storage.getRecentOTPAttempts(email, 10);
+        if (recentAttempts >= 3) {
+            return res.status(429).json({
+                success: false,
+                message: "Too many reset attempts. Please wait 10 minutes before trying again."
+            });
+        }
+
+        const otp = generateOTP();
+        const otpResult = await storage.createOTP(
+            email,
+            otp,
+            'reset',
+            user.id,
+            {
+                ipAddress: req.ip,
+                userAgent: req.headers['user-agent']
+            }
+        );
+
+        const emailResult = await sendOTPEmail(email, otp, 'reset');
+
+        const response = {
+            success: true,
+            message: emailResult.devMode
+                ? `New reset OTP: ${otp} (Email service not configured)`
+                : "New reset OTP sent to your email",
+            devMode: emailResult.devMode || false,
+            otpMasked: otpResult.maskedOtp
+        };
+
+        if (emailResult.devMode) {
+            response.otp = otp;
+        }
+
+        res.json(response);
+
+    } catch (error) {
+        console.error('Resend reset OTP error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: "Unable to resend reset OTP"
+        });
+    }
+}
+
+exports.verifyResetOTP = async(req, res) => {
+    try {
+        const { email, otp } = req.body;
+
+        if (!email || !otp) {
+            return res.status(400).json({
+                success: false,
+                message: "Email and OTP are required"
+            });
+        }
+
+        const storedOTP = await storage.getValidOTP(email, otp, 'reset', {
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent']
+        });
+
+        if (!storedOTP) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid or expired OTP. Please request a new one."
+            });
+        }
+
+        await storage.consumeOTP(email, otp, {
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+            consumptionSource: "password_reset"
+        });
+
+        const resetToken = jwt.sign(
+            {
+                id: storedOTP.userId,
+                email: email,
+                type: 'password_reset'
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: '10m' }
+        );
+
+        res.json({
+            success: true,
+            message: "OTP verified successfully",
+            resetToken: resetToken
+        });
+
+    } catch (error) {
+        console.error('Reset OTP verification error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: "Internal server error"
+        });
+    }
+}
+
+exports.resetPassword = async(req, res) => {
+    try {
+        const { resetToken, newPassword, confirmPassword } = req.body;
+
+        if (!resetToken || !newPassword || !confirmPassword) {
+            return res.status(400).json({
+                success: false,
+                message: "All fields are required"
+            });
+        }
+
+        if (newPassword !== confirmPassword) {
+            return res.status(400).json({
+                success: false,
+                message: "Passwords do not match"
+            });
+        }
+
+        let decoded;
+        try {
+            decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
+        } catch (error) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid or expired password reset token."
+            });
+        }
+
+        if (decoded.type !== 'password_reset') {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid reset token"
+            });
+        }
+
+        const user = await storage.getUserByEmail(decoded.email);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found"
+            });
+        }
+
+        // Check business status before allowing password reset
+        const businessId = user.associatedBusinessId || user.institutionId;
+        const businessStatusCheck = await checkBusinessStatus(businessId);
+
+        if (!businessStatusCheck.isActive) {
+            return res.status(403).json({
+                success: false,
+                message: `Your business "${businessStatusCheck.businessName || 'account'}" has been ${businessStatusCheck.businessStatus}. Please contact your administrator.`,
+                businessStatus: businessStatusCheck.businessStatus,
+                code: "BUSINESS_DISABLED"
+            });
+        }
+
+        if (user.password) {
+            const isSameAsOldPassword = await bcrypt.compare(newPassword, user.password);
+            if (isSameAsOldPassword) {
+                return res.status(400).json({
+                    success: false,
+                    message: "New password cannot be the same as the old password."
+                });
+            }
+        }
+
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+        const updateResult = await storage.updateUserPassword(user.id, hashedPassword);
+        if (!updateResult) {
+            return res.status(400).json({
+                success: false,
+                message: "Failed to update password"
+            });
+        }
+
+        res.json({
+            success: true,
+            message: "Password has been reset successfully."
+        });
+
+    } catch (error) {
+        console.error('Password reset error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: "Internal server error"
+        });
+    }
+}
+
+exports.logout = async(req, res) => {
+    try {
+        const authHeader = req.headers['authorization'];
+        const token = authHeader?.split(' ')[1];
+
+        if (token) {
+            const decoded = jwt.decode(token); // decode without verify — token may still be valid
+            const expiresAtMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + 3600 * 1000;
+            blacklistToken(token, expiresAtMs);
+        }
+
+        res.json({ success: true, message: "Logged out successfully" });
+    } catch (error) {
+        console.error('Logout error:', error.message);
+        res.status(500).json({ success: false, message: "Logout failed" });
+    }
+}
+
+
+
