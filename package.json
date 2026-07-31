@@ -6,7 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "postinstall": "node node_modules/prisma/build/index.js generate",
-    "build": "npm install && chmod +x node_modules/.bin/* && npx prisma generate && npm run build",
+    "build": "chmod +x node_modules/.bin/* && node node_modules/prisma/build/index.js migrate deploy",
     "start": "node index.js",
     "dev": "node index.js"
   },
