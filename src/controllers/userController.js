@@ -3,6 +3,7 @@ const { userSchema } = require('../utils/schema.js');
 const { z } = require('zod');
 const jwt = require('jsonwebtoken');
 const { createTransporter } = require('../services/mailer.js')
+const { storage } = require('../utils/storage.js');
 
 
 const canAccessBusiness = (user, businessId) => {
@@ -53,6 +54,123 @@ const canAccessBusiness = (user, businessId) => {
 
         console.log(`❌ Access denied: No business ID match`);
         return false;
+};
+
+const normalizeRole = (role, businessType) => {
+    if (!role) return 'Shopkeeper';
+
+    // Convert spaces to underscores
+    const normalized = role.replace(/\s+/g, '_');
+
+    // Map generic roles to business-specific roles
+    const roleMapping = {
+        'Admin': (businessType) => `${businessType}_Admin`,
+        'Shopkeeper': (businessType) => `${businessType}_Shopkeeper`,
+        'Manager': (businessType) => `${businessType}_Manager`,
+        'Receptionist': (businessType) => `${businessType}_Receptionist`,
+        'Housekeeping': (businessType) => `${businessType}_Housekeeping`,
+        'Waiter': (businessType) => `${businessType}_Waiter`,
+        'Chef': (businessType) => `${businessType}_Chef`,
+        'Cashier': (businessType) => `${businessType}_Cashier`,
+        'Sales_Associate': (businessType) => `${businessType}_Sales_Associate`,
+    };
+
+    // If it's a generic role, convert to business-specific role
+    if (roleMapping[normalized] && businessType) {
+        return roleMapping[normalized](businessType);
+    }
+
+    return normalized;
+};
+
+const ALLOWED_ROLES_BY_BUSINESS_TYPE = {
+    'Kiosk': ['Kiosk_Admin', 'Kiosk_Shopkeeper', 'Super_Admin', 'Biztrack_ADMIN'],
+    'Hotel': ['Hotel_Admin', 'Hotel_Manager', 'Hotel_Receptionist', 'Hotel_Housekeeping', 'Hotel_Waiter', 'Hotel_Cashier', 'Super_Admin', 'Biztrack_ADMIN'],
+    'Restaurant': ['Restaurant_Admin', 'Restaurant_Manager', 'Restaurant_Waiter', 'Restaurant_Chef', 'Super_Admin', 'Biztrack_ADMIN'],
+    'Retail': ['Retail_Admin', 'Retail_Manager', 'Retail_Cashier', 'Retail_Sales_Associate', 'Super_Admin', 'Biztrack_ADMIN'],
+    'Hospital': ['Hospital_Admin', 'Doctor', 'Nurse', 'Lab_Technician', 'Receptionist', 'Pharmacist', 'Super_Admin', 'Biztrack_ADMIN'],
+    'Other': ['Super_Admin', 'Biztrack_ADMIN'],
+};
+
+const validateRoleForBusinessType = (role, businessType) => {
+    const businessRoles = ALLOWED_ROLES_BY_BUSINESS_TYPE[businessType] || [];
+
+    return businessRoles.includes(role);
+};
+
+const getRolesForBusinessType = (businessType) => {
+    return ALLOWED_ROLES_BY_BUSINESS_TYPE[businessType] || [];
+};
+
+const generatePasswordResetToken = (user) => {
+    return jwt.sign(
+        { id: user.id || user._id, email: user.email, type: 'password_reset' },
+        process.env.JWT_SECRET,
+        { expiresIn: '24h' }
+    );
+};
+
+const sendPasswordResetEmail = async (user, resetToken, business) => {
+    const transporter = createTransporter();
+
+    if (!transporter) {
+        console.error('Password reset email not sent: email service not configured.');
+        return false;
+    }
+
+    const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
+
+    try {
+        const mailOptions = {
+            from: {
+                name: 'BizTrack Application',
+                address: process.env.EMAIL_USER
+            },
+            to: user.email,
+            subject: 'Set Up Your BizTrack Account',
+            html: `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <style>
+                    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                    .header { text-align: center; margin-bottom: 30px; }
+                    .button { display: inline-block; background: #4F46E5; color: #fff; padding: 12px 24px; border-radius: 6px; text-decoration: none; margin: 20px 0; }
+                    .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6; text-align: center; color: #666; font-size: 12px; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header">
+                        <h1>BizTrack Application</h1>
+                    </div>
+                    <p>Hello ${user.firstName || user.username},</p>
+                    <p>An account has been created for you at <strong>${business.businessName}</strong>. Click the button below to set your password:</p>
+                    <p style="text-align:center;"><a class="button" href="${resetLink}">Set Your Password</a></p>
+                    <p>This link will expire in 24 hours.</p>
+                    <div class="footer">
+                        <p>© ${new Date().getFullYear()} BizTrack Application</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            `,
+            text: `An account has been created for you at ${business.businessName}. Set your password here: ${resetLink} (expires in 24 hours).`
+        };
+
+        const sendPromise = transporter.sendMail(mailOptions);
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Email sending timeout after 15 seconds')), 15000);
+        });
+
+        await Promise.race([sendPromise, timeoutPromise]);
+        return true;
+    } catch (error) {
+        console.error('Password reset email sending failed:', error.message);
+        return false;
+    }
 };
 
 exports.createUser = async(req, res) => {
@@ -174,7 +292,7 @@ exports.createUser = async(req, res) => {
         });
 
         // 9. Generate password reset token and send email
-        const resetToken = generatePasswordResetToken();
+        const resetToken = generatePasswordResetToken(newUser);
         const emailSent = await sendPasswordResetEmail(newUser, resetToken, businessObj);
 
         console.log(`✅ User created successfully: ${newUser.username} for business: ${businessObj.businessName}`);

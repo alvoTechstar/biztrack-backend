@@ -1,4 +1,4 @@
-const storage = require('../utils/storage.js');
+const { storage } = require('../utils/storage.js');
 const mpesaService = require('../services/mpesaService.js');
 
 const updateProductStock = async (transaction) => {

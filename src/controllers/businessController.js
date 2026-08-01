@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const z = require('zod');
-const { insertBusinessSchema, processBusinessData, transformBusinessResponse } = require('../utils/schema.js');
+const { insertBusinessSchema, updateBusinessSchema, processBusinessData, transformBusinessResponse } = require('../utils/schema.js');
 const { storage } = require('../utils/storage.js');
 const path = require('path');
 
@@ -11,7 +11,7 @@ const safeMap = (array, callback) => {
     return array.map(callback);
 };
 
-const logosDir = path.join(__dirname, '..', 'assets', 'logos');
+const logosDir = path.join(__dirname, '..', '..', 'assets', 'logos');
 
 const getRelativeLogoPath = (logoPath) => {
     if (!logoPath) {
@@ -136,7 +136,7 @@ exports.createBusiness = async (req, res) => {
                 website: body.website,
                 description: body.description,
                 primaryColor: body.primaryColor,
-                status: body.status || 'active',
+                status: 'active', // business creation is admin-only, so it always starts active
                 owner: body.owner,
                 // Payment fields
                 paymentType: body.paymentType,

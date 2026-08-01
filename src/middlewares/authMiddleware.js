@@ -105,6 +105,13 @@ const createAuthMiddleware = (storage) => {
                 });
             }
 
+            // Platform admins manage all businesses — never block them based on
+            // the status of whichever business their own account happens to be linked to.
+            const adminRoles = ['super-admin', 'super_admin', 'Super_Admin', 'Biztrack_ADMIN', 'admin'];
+            if (adminRoles.includes(req.user.role)) {
+                return next();
+            }
+
             // Get business ID from token payload
             const businessId = req.user.businessUUID || req.user.businessId || req.user.associatedBusinessId;
 

@@ -1,5 +1,5 @@
 const express = require('express');
-const storage = require('../utils/storage.js');
+const { storage } = require('../utils/storage.js');
 const mpesaService = require('../services/mpesaService.js');
 
 async function createHotelPayment(req, res) {

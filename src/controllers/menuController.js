@@ -1,4 +1,4 @@
-const storage = require('../utils/storage.js');
+const { storage } = require('../utils/storage.js');
 
 const UPDATABLE_MENU_FIELDS = [
   'name', 'category', 'price', 'description', 'image', 'available', 'businessUUID',

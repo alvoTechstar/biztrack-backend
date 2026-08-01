@@ -1,10 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer')
+const path = require('path');
+const fs = require('fs');
 
 const businessController = require('../../controllers/businessController.js');
 const { createAuthMiddleware } = require('../../middlewares/authMiddleware.js')
 const { storage } = require('../../utils/storage.js');
+
+const logosDir = path.join(__dirname, '..', '..', '..', 'assets', 'logos');
+fs.mkdirSync(logosDir, { recursive: true });
 
 const storageConfig = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -47,11 +52,11 @@ const {
 
 const adminRoles = ['super-admin', 'super_admin', 'Super_Admin', 'Biztrack_ADMIN', 'admin'];
 
-router.post('/create', authenticateToken, allowBusinessCreation, upload.single('logo'), businessController.createBusiness);
+router.post('/create-business', authenticateToken, allowBusinessCreation, upload.single('logo'), businessController.createBusiness);
 router.get('/get-all-businesses', authenticateToken, requireActiveBusiness, authorize(adminRoles),businessController.getAllBusinesses);
 router.get('/get-business/:id', authenticateToken, requireBusinessOwner, businessController.getBusinessById);
-router.get('business-status/:id', businessController.businessStatus);
-router.get('debug/storage', authenticateToken, requireActiveBusiness, businessController.debugStorage);
+router.get('/business-status/:id', businessController.businessStatus);
+router.get('/debug/storage', authenticateToken, requireActiveBusiness, businessController.debugStorage);
 router.put('/update-business/:id', authenticateToken, requireBusinessOwner, upload.single('logo'), businessController.updateBusinessById);
 router.put('/update-status/:id/', authenticateToken, requireBusinessOwner, authorize(adminRoles), businessController.updateStatus);
 router.delete('/delete-business/:id', authenticateToken, requireActiveBusiness, authorize(adminRoles), businessController.deleteBusiness);

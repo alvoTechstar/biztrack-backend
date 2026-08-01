@@ -1,4 +1,4 @@
-const storage = require('../utils/storage.js');
+const { storage } = require('../utils/storage.js');
 
 const VALID_TRANSITIONS = {
   'pending':     ['in-progress', 'cancelled'],

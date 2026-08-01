@@ -46,7 +46,13 @@ const crypto = require('crypto');
 //     });
 // }
 
+let cachedTransporter = null;
+
 const createTransporter = () => {
+    if (cachedTransporter) {
+        return cachedTransporter;
+    }
+
     const emailUser = process.env.EMAIL_USER;
     const emailPass = process.env.SMTP_PASS;
 
@@ -57,10 +63,10 @@ const createTransporter = () => {
 
     try {
         // Render-compatible configuration
-        const transporter = nodemailer.createTransport({
+        cachedTransporter = nodemailer.createTransport({
             host: process.env.SMTP_HOST,
             port: Number(process.env.SMTP_PORT),
-            secure: false, // Use STARTTLS
+            secure: Number(process.env.SMTP_PORT) === 465, // 465 = implicit TLS, 587 = STARTTLS
             auth: {
                 user: emailUser,
                 pass: emailPass
@@ -74,13 +80,13 @@ const createTransporter = () => {
                 ciphers: 'SSLv3',
                 rejectUnauthorized: false
             },
-            // Pooling for better performance
+            // Pooling for better performance — kept alive across calls via the cachedTransporter singleton
             pool: true,
             maxConnections: 1,
             maxMessages: 10
         });
 
-        return transporter;
+        return cachedTransporter;
     } catch (error) {
         console.error('Failed to create email transporter:', error.message);
         return null;
